@@ -1,0 +1,44 @@
+name: Deploy Finance Automation to VM
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.2.2
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            echo "--- Navigating to project folder ---"
+            cd /home/deployer/finance-app
+
+            echo "--- Pulling latest changes from main ---"
+            git pull origin main
+
+            echo "--- Rebuilding Frontend ---"
+            cd /home/deployer/finance-app/finance_automation/frontend
+            npm install
+            npm run build
+
+            echo "--- Updating Backend Dependencies ---"
+            cd /home/deployer/finance-app/finance_automation/backend
+            source /home/deployer/finance-app/finance_automation/backend/.venv/bin/activate || true
+            pip install -r requirements.txt
+
+            echo "--- Reloading Services ---"
+            sudo systemctl reload nginx
+            sudo systemctl restart finance-backend || true
+
+            echo "--- Deployment Complete! ---"
