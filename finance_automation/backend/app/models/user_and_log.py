@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from app.database.connection import Base
 
 
@@ -52,3 +52,17 @@ class PasswordResetOTP(Base):
     attempts = Column(Integer, default=0)
     is_used = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class ReportJob(Base):
+    """Persists report generation results so all server workers can read them."""
+    __tablename__ = "report_jobs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, unique=True, index=True, nullable=False)
+    status = Column(String, nullable=False)  # "processing" | "success" | "error"
+    result_json = Column(Text, nullable=True)  # full JSON blob of ReportResponse.model_dump()
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(
+        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
+    )
