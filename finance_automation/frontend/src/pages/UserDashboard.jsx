@@ -223,30 +223,52 @@ export default function UserDashboard() {
 
       <div className="min-h-screen bg-[linear-gradient(180deg,#edf4fb_0%,#f8fafc_46%,#eef3f8_100%)] font-sans text-slate-900">
         <div className="flex min-h-screen">
-          <aside className="hidden w-[284px] shrink-0 flex-col border-r border-white/10 bg-[#071b2a] text-white shadow-[18px_0_48px_rgba(7,27,42,0.16)] lg:flex">
-            <div className="px-7 pb-6 pt-7">
-              <div className="rounded-lg border border-white/10 bg-white/8 p-4">
-                <img src="/logo.png" alt="SLT Mobitel Logo" className="h-12 object-contain" />
+          <aside className="hidden w-[284px] shrink-0 flex-col justify-between border-r border-white/10 bg-[#071b2a] text-white shadow-[18px_0_48px_rgba(7,27,42,0.16)] lg:flex">
+            <div>
+              <div className="px-7 pb-6 pt-7">
+                <div className="rounded-lg border border-white/10 bg-white/8 p-4">
+                  <img src="/logo.png" alt="SLT Mobitel Logo" className="h-12 object-contain" />
+                </div>
               </div>
+
+              <nav className="px-4">
+                {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => navigate(path)}
+                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${
+                      active
+                        ? "bg-white text-[#071b2a] shadow-lg"
+                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    <Icon fontSize="small" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            <nav className="px-4">
-              {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => navigate(path)}
-                  className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${
-                    active
-                      ? "bg-white text-[#071b2a] shadow-lg"
-                      : "text-slate-300 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  <Icon fontSize="small" />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </nav>
+            <div className="p-4 border-t border-white/10 mt-auto">
+              <Button
+                onClick={handleLogout}
+                variant="contained"
+                fullWidth
+                startIcon={<LogoutIcon />}
+                sx={{
+                  height: 44,
+                  backgroundColor: "#E1251B",
+                  textTransform: "none",
+                  fontWeight: 900,
+                  borderRadius: 1.5,
+                  boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
+                  "&:hover": { backgroundColor: "#C11812" },
+                }}
+              >
+                Sign Out
+              </Button>
+            </div>
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col">
@@ -264,33 +286,35 @@ export default function UserDashboard() {
                   <button
                     type="button"
                     onClick={() => navigate("/profile")}
-                    className="hidden items-center rounded-lg border border-slate-200 bg-white p-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] transition hover:border-sky-200 hover:bg-sky-50 md:flex"
+                    className="flex items-center rounded-lg border border-slate-200 bg-white p-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] transition hover:border-sky-200 hover:bg-sky-50"
                     aria-label="Open user profile"
                   >
                     <div className="grid h-11 w-11 place-items-center rounded-lg bg-[#082f49] text-white shadow-sm">
                       <PersonIcon sx={{ fontSize: 22 }} />
                     </div>
                   </button>
-                  <Tooltip title="Sign out">
-                    <Button
-                      onClick={handleLogout}
-                      variant="contained"
-                      startIcon={<LogoutIcon />}
-                      sx={{
-                        minWidth: { xs: 42, sm: "auto" },
-                        px: { xs: 1.2, sm: 2.4 },
-                        height: 42,
-                        backgroundColor: "#E1251B",
-                        textTransform: "none",
-                        fontWeight: 900,
-                        borderRadius: 1.5,
-                        boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
-                        "&:hover": { backgroundColor: "#C11812" },
-                      }}
-                    >
-                      <span className="hidden sm:inline">Sign Out</span>
-                    </Button>
-                  </Tooltip>
+                  <div className="lg:hidden">
+                    <Tooltip title="Sign out">
+                      <Button
+                        onClick={handleLogout}
+                        variant="contained"
+                        startIcon={<LogoutIcon />}
+                        sx={{
+                          minWidth: { xs: 42, sm: "auto" },
+                          px: { xs: 1.2, sm: 2.4 },
+                          height: 42,
+                          backgroundColor: "#E1251B",
+                          textTransform: "none",
+                          fontWeight: 900,
+                          borderRadius: 1.5,
+                          boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
+                          "&:hover": { backgroundColor: "#C11812" },
+                        }}
+                      >
+                        <span className="hidden sm:inline">Sign Out</span>
+                      </Button>
+                    </Tooltip>
+                  </div>
                 </div>
               </div>
             </header>

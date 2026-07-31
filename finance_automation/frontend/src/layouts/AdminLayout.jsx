@@ -249,6 +249,25 @@ export default function AdminLayout() {
           ))}
         </nav>
 
+        <div className="p-4 border-t border-white/10 mt-auto">
+          <Button
+            onClick={handleLogout}
+            variant="contained"
+            fullWidth
+            startIcon={<LogoutIcon />}
+            sx={{
+              height: 44,
+              backgroundColor: "#E1251B",
+              textTransform: "none",
+              fontWeight: 900,
+              borderRadius: 1.5,
+              boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
+              "&:hover": { backgroundColor: "#C11812" },
+            }}
+          >
+            Sign Out
+          </Button>
+        </div>
       </aside>
 
       {/* Main Content Area */}
@@ -270,7 +289,7 @@ export default function AdminLayout() {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                className="hidden items-center rounded-lg border border-slate-200 bg-white p-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] md:flex"
+                className="flex items-center rounded-lg border border-slate-200 bg-white p-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
                 aria-label="Admin profile"
                 onClick={() => setActiveTab("profile")}
               >
@@ -278,26 +297,28 @@ export default function AdminLayout() {
                   <PersonIcon sx={{ fontSize: 22 }} />
                 </div>
               </button>
-              <Tooltip title="Sign out">
-                <Button
-                  onClick={handleLogout}
-                  variant="contained"
-                  startIcon={<LogoutIcon />}
-                  sx={{
-                    minWidth: { xs: 42, sm: "auto" },
-                    px: { xs: 1.2, sm: 2.4 },
-                    height: 42,
-                    backgroundColor: "#E1251B",
-                    textTransform: "none",
-                    fontWeight: 900,
-                    borderRadius: 1.5,
-                    boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
-                    "&:hover": { backgroundColor: "#C11812" },
-                  }}
-                >
-                  <span className="hidden sm:inline">Sign Out</span>
-                </Button>
-              </Tooltip>
+              <div className="lg:hidden">
+                <Tooltip title="Sign out">
+                  <Button
+                    onClick={handleLogout}
+                    variant="contained"
+                    startIcon={<LogoutIcon />}
+                    sx={{
+                      minWidth: { xs: 42, sm: "auto" },
+                      px: { xs: 1.2, sm: 2.4 },
+                      height: 42,
+                      backgroundColor: "#E1251B",
+                      textTransform: "none",
+                      fontWeight: 900,
+                      borderRadius: 1.5,
+                      boxShadow: "0 10px 18px rgba(225,37,27,0.2)",
+                      "&:hover": { backgroundColor: "#C11812" },
+                    }}
+                  >
+                    <span className="hidden sm:inline">Sign Out</span>
+                  </Button>
+                </Tooltip>
+              </div>
             </div>
           </div>
         </header>

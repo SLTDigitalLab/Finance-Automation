@@ -1,5 +1,6 @@
 from importlib.resources import files
 import os
+import json
 import time
 import uuid
 import shutil
@@ -9,7 +10,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.database.connection import get_db, SessionLocal
 from app.auth.jwt_handler import get_admin_user, get_current_active_user
-from app.models.user_and_log import User
+from app.models.user_and_log import User, ReportJob
 from app.services.audit_logger import log_audit
 from utils.logger import logger
 from config import settings
@@ -35,6 +36,45 @@ router = APIRouter(prefix="/api", tags=["finance"])
 
 uploaded_files_store: dict = {}
 report_jobs: dict = {}
+
+
+def _db_save_job(session_id: str, status: str, result: dict | None = None):
+    """Upsert a report job row in the database (visible to all workers)."""
+    db = SessionLocal()
+    try:
+        row = db.query(ReportJob).filter(ReportJob.session_id == session_id).first()
+        if row:
+            row.status = status
+            row.result_json = json.dumps(result) if result is not None else None
+        else:
+            row = ReportJob(
+                session_id=session_id,
+                status=status,
+                result_json=json.dumps(result) if result is not None else None,
+            )
+            db.add(row)
+        db.commit()
+    except Exception as exc:
+        logger.warning(f"Could not persist job to DB for {session_id}: {exc}")
+    finally:
+        db.close()
+
+
+def _db_load_job(session_id: str) -> dict | None:
+    """Load a report job row from the database. Returns None if not found."""
+    db = SessionLocal()
+    try:
+        row = db.query(ReportJob).filter(ReportJob.session_id == session_id).first()
+        if row and row.result_json:
+            return json.loads(row.result_json)
+        if row and row.status == "processing":
+            return {"status": "processing", "message": "Report generation in progress."}
+        return None
+    except Exception as exc:
+        logger.warning(f"Could not load job from DB for {session_id}: {exc}")
+        return None
+    finally:
+        db.close()
 
 
 DEFAULT_FILES_DIR = settings.TEMPLATE_DIR / "defaults"
@@ -168,6 +208,18 @@ def _build_report_for_session(
     file_paths["report_month"] = report_month
     file_paths["report_year"] = report_year
 
+    session_dir = settings.UPLOAD_DIR / session_id
+    if session_dir.exists():
+        try:
+            cy_unmapped_df.to_csv(session_dir / "cy_unmapped.csv", index=False)
+            py_unmapped_df.to_csv(session_dir / "py_unmapped.csv", index=False)
+            (session_dir / "report_meta.json").write_text(
+                json.dumps({"report_month": report_month, "report_year": report_year}),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist unmapped DataFrames to disk: {e}")
+
     logger.info("Processing current year TB data...")
     cy_tb_data = process_trial_balance(cy_tb_df)
 
@@ -220,7 +272,10 @@ def _run_report_job(session_id: str, user_id: int, user_name: str):
     db = SessionLocal()
     try:
         result = _build_report_for_session(session_id, db, user_id, user_name)
-        report_jobs[session_id] = result.model_dump()
+        job_data = result.model_dump()
+        report_jobs[session_id] = job_data
+        # Persist to DB so other workers can read the full result
+        _db_save_job(session_id, "success", job_data)
     except HTTPException as e:
         detail = e.detail
         if isinstance(detail, dict) and "errors" in detail:
@@ -228,13 +283,17 @@ def _run_report_job(session_id: str, user_id: int, user_name: str):
         else:
             message = str(detail)
         logger.error(f"Report job failed for session {session_id}: {message}")
-        report_jobs[session_id] = {"status": "error", "message": message}
+        error_data = {"status": "error", "message": message}
+        report_jobs[session_id] = error_data
+        _db_save_job(session_id, "error", error_data)
     except Exception as e:
         logger.exception(f"Report job failed for session {session_id}: {e}")
-        report_jobs[session_id] = {
+        error_data = {
             "status": "error",
             "message": f"Report generation failed: {str(e)}",
         }
+        report_jobs[session_id] = error_data
+        _db_save_job(session_id, "error", error_data)
     finally:
         db.close()
 
@@ -421,6 +480,8 @@ async def generate_report(
     if existing_job:
         return existing_job
 
+    # Mark as processing in DB (visible to other workers) and launch background task
+    _db_save_job(session_id, "processing")
     report_jobs[session_id] = {
         "status": "processing",
         "message": "Report generation started.",
@@ -440,23 +501,25 @@ async def get_report_status(
     session_id: str,
     current_user: User = Depends(get_current_active_user)
 ):
+    # 1. Check in-memory (same worker — fastest path)
     job = report_jobs.get(session_id)
+    if job and job.get("status") in ("success", "error"):
+        return job
+
+    # 2. Query the database (works across all workers and restarts)
+    db_result = _db_load_job(session_id)
+    if db_result:
+        if db_result.get("status") in ("success", "error"):
+            # Cache in this worker's memory for future polls
+            report_jobs[session_id] = db_result
+        return db_result
+
+    # 3. If in-memory shows "processing" but DB has nothing yet, keep polling
     if job:
         return job
 
-    generated_files = sorted(settings.OUTPUT_DIR.glob("Revenue_*.pptx"))
-    if generated_files:
-        latest = generated_files[-1]
-        return {
-            "status": "success",
-            "filename": latest.name,
-            "message": "Report generated successfully.",
-        }
-
-    raise HTTPException(
-        status_code=404,
-        detail="Report generation status not found. Please generate the report again.",
-    )
+    # 4. Truly unknown session — tell client to keep waiting (do NOT return fake success)
+    return {"status": "processing", "message": "Waiting for report generation to start."}
 
 
 @router.get("/download/{filename}")
@@ -487,6 +550,82 @@ async def download_report(
     )
 
 
+def _get_or_compute_unmapped_dfs(session_id: str, file_paths: dict):
+    import pandas as pd
+    session_dir = settings.UPLOAD_DIR / session_id
+    cy_unmapped = file_paths.get("cy_unmapped_df")
+    py_unmapped = file_paths.get("py_unmapped_df")
+    report_month = file_paths.get("report_month", "")
+    report_year = file_paths.get("report_year", "")
+
+    meta_file = session_dir / "report_meta.json"
+    cy_csv = session_dir / "cy_unmapped.csv"
+    py_csv = session_dir / "py_unmapped.csv"
+
+    if (cy_unmapped is None or py_unmapped is None) and cy_csv.exists() and py_csv.exists():
+        try:
+            cy_unmapped = pd.read_csv(cy_csv).fillna("")
+            py_unmapped = pd.read_csv(py_csv).fillna("")
+            file_paths["cy_unmapped_df"] = cy_unmapped
+            file_paths["py_unmapped_df"] = py_unmapped
+        except Exception as e:
+            logger.warning(f"Error loading unmapped CSVs for session {session_id}: {e}")
+
+    if (not report_month or not report_year) and meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            report_month = meta.get("report_month", "")
+            report_year = meta.get("report_year", "")
+            file_paths["report_month"] = report_month
+            file_paths["report_year"] = report_year
+        except Exception:
+            pass
+
+    if cy_unmapped is None or py_unmapped is None or not report_month or not report_year:
+        logger.info(f"Re-generating unmapped DataFrames on the fly for session {session_id}")
+        tb_current_path = file_paths.get("tb_current")
+        tb_previous_path = file_paths.get("tb_previous")
+        mapping_path = file_paths.get("mapping")
+
+        if not tb_current_path or not tb_previous_path:
+            return None, None, "", ""
+
+        report_month, report_year = detect_tb_month_and_year(tb_current_path)
+
+        mapping_engine = MappingEngine()
+        if mapping_path and os.path.exists(mapping_path):
+            mapping_engine.load_mapping(mapping_path)
+
+        cy_tb_df = read_current_year_tb(tb_current_path)
+        if not cy_tb_df.empty:
+            cy_tb_df = mapping_engine.map_tb_rows(cy_tb_df)
+            cy_unmapped = mapping_engine.get_unmapped_report()
+        else:
+            cy_unmapped = pd.DataFrame()
+
+        py_tb_df = read_previous_year_tb(tb_previous_path)
+        if not py_tb_df.empty:
+            py_tb_df = mapping_engine.map_tb_rows(py_tb_df)
+            py_unmapped = mapping_engine.get_unmapped_report()
+        else:
+            py_unmapped = pd.DataFrame()
+
+        file_paths["cy_unmapped_df"] = cy_unmapped
+        file_paths["py_unmapped_df"] = py_unmapped
+        file_paths["report_month"] = report_month
+        file_paths["report_year"] = report_year
+
+        if session_dir.exists():
+            try:
+                cy_unmapped.to_csv(cy_csv, index=False)
+                py_unmapped.to_csv(py_csv, index=False)
+                meta_file.write_text(json.dumps({"report_month": report_month, "report_year": report_year}), encoding="utf-8")
+            except Exception:
+                pass
+
+    return cy_unmapped, py_unmapped, report_month, report_year
+
+
 @router.post("/generate-unmapped")
 async def generate_unmapped_report(
     request: Request,
@@ -509,10 +648,8 @@ async def generate_unmapped_report(
                 "Please upload the files and generate the report again."
             ),
         )
-    cy_unmapped = file_paths.get("cy_unmapped_df")
-    py_unmapped = file_paths.get("py_unmapped_df")
-    report_month = file_paths.get("report_month", "")
-    report_year = file_paths.get("report_year", "")
+
+    cy_unmapped, py_unmapped, report_month, report_year = _get_or_compute_unmapped_dfs(session_id, file_paths)
 
     if cy_unmapped is None or py_unmapped is None:
         raise HTTPException(
@@ -889,7 +1026,7 @@ async def generate_unmapped_report(
                 ws.append([])
 
                 if issue_name == "International BL Filter":
-                    bl_list = ", ".join(sorted(type_df["business_line"].unique())[:8])
+                    bl_list = ", ".join(str(x) for x in sorted(type_df["business_line"].unique())[:8])
                     ws.append(
                         [
                             f"PROBLEM: The International catch-all rules (BL=81-93) are also matching "
