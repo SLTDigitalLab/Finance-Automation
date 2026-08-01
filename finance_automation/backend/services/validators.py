@@ -109,6 +109,7 @@ def validate_budget_workbook(budget_path: str) -> ValidationResult:
 
 def validate_trial_balance(tb_path: str, label: str) -> ValidationResult:
     import openpyxl
+    import re
 
     result = ValidationResult()
 
@@ -118,10 +119,26 @@ def validate_trial_balance(tb_path: str, label: str) -> ValidationResult:
     if ext == ".txt":
         try:
             with open(tb_path, "r", encoding="utf-8", errors="ignore") as f:
-                lines = [line.strip() for line in f if line.strip()]
+                content = f.read()
+
+            lines = [line.strip() for line in content.splitlines() if line.strip()]
 
             if len(lines) == 0:
                 result.add_error(f"{label} Trial Balance TXT file is empty.")
+                return result
+
+            # Internal text markers check (case-insensitive):
+            # Standard Trial Balance files contain "Year to date as of" or lack "Period to date for"
+            content_lower = content.lower()
+            is_ytd = "year to date as of" in content_lower
+            is_ptd = "period to date for" in content_lower or "period to date" in content_lower
+
+            if is_ytd or not is_ptd:
+                error_msg = (
+                    "This file is not supported. Standard Trial Balance files cannot be uploaded "
+                    "to the system. Please upload the 'PTD - Shared Revenue only' file."
+                )
+                result.add_error(error_msg)
             else:
                 logger.info(f"{label} Trial Balance TXT validated successfully.")
 

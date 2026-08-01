@@ -41,6 +41,8 @@ import {
 } from "../services/api";
 import StatusPanel from "../components/StatusPanel";
 import ReportSummaryActions from "../components/ReportSummaryActions";
+import ValidationErrorModal from "../components/ValidationErrorModal";
+import { validateTrialBalanceFile } from "../utils/fileValidation";
 
 const theme = createTheme({
   palette: {
@@ -83,6 +85,7 @@ export default function UserDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [unmappedLoading, setUnmappedLoading] = useState(false);
+  const [validationErrorMsg, setValidationErrorMsg] = useState(null);
 
   const fetchConfig = useCallback(async () => {
     try {
@@ -112,9 +115,17 @@ export default function UserDashboard() {
     return filename || "system global template";
   };
 
-  const handleFileChange = useCallback((key, event) => {
+  const handleFileChange = useCallback(async (key, event) => {
     const file = event.target.files[0];
     if (file) {
+      const validation = await validateTrialBalanceFile(file, key);
+      if (!validation.isValid) {
+        setValidationErrorMsg(validation.errorMessage);
+        if (event.target) {
+          event.target.value = "";
+        }
+        return;
+      }
       setFiles((prev) => ({ ...prev, [key]: file }));
     }
   }, []);
@@ -553,6 +564,11 @@ export default function UserDashboard() {
           </main>
         </div>
       </div>
+      <ValidationErrorModal
+        open={!!validationErrorMsg}
+        onClose={() => setValidationErrorMsg(null)}
+        message={validationErrorMsg}
+      />
     </ThemeProvider>
   );
 }
