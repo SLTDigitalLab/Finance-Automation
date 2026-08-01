@@ -79,13 +79,55 @@ export default function UserDashboard() {
   });
 
   const [files, setFiles] = useState({});
-  const [activeStep, setActiveStep] = useState(0);
-  const [uploadResult, setUploadResult] = useState(null);
-  const [reportResult, setReportResult] = useState(null);
+  const [activeStep, setActiveStep] = useState(() => {
+    const saved = sessionStorage.getItem("slt_active_step");
+    return saved !== null ? Number(saved) : 0;
+  });
+  const [uploadResult, setUploadResult] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("slt_upload_result");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [reportResult, setReportResult] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("slt_report_result");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [unmappedLoading, setUnmappedLoading] = useState(false);
   const [validationErrorMsg, setValidationErrorMsg] = useState(null);
+  const [progressData, setProgressData] = useState(null);
+
+  useEffect(() => {
+    if (activeStep > 0) {
+      sessionStorage.setItem("slt_active_step", String(activeStep));
+    } else {
+      sessionStorage.removeItem("slt_active_step");
+    }
+  }, [activeStep]);
+
+  useEffect(() => {
+    if (uploadResult) {
+      sessionStorage.setItem("slt_upload_result", JSON.stringify(uploadResult));
+    } else {
+      sessionStorage.removeItem("slt_upload_result");
+    }
+  }, [uploadResult]);
+
+  useEffect(() => {
+    if (reportResult) {
+      sessionStorage.setItem("slt_report_result", JSON.stringify(reportResult));
+    } else {
+      sessionStorage.removeItem("slt_report_result");
+    }
+  }, [reportResult]);
 
   const fetchConfig = useCallback(async () => {
     try {
@@ -101,10 +143,11 @@ export default function UserDashboard() {
   }, [fetchConfig]);
 
   const allFilesUploaded =
-    files.tb_current &&
-    files.tb_previous &&
-    (files.budget || adminConfig.default_budget_active) &&
-    (files.mapping || adminConfig.default_mapping_active);
+    (files.tb_current &&
+      files.tb_previous &&
+      (files.budget || adminConfig.default_budget_active) &&
+      (files.mapping || adminConfig.default_mapping_active)) ||
+    uploadResult != null;
 
   const currentYear = new Date().getFullYear();
   const getDefaultLabel = (key) => {
@@ -221,6 +264,9 @@ export default function UserDashboard() {
     setReportResult(null);
     setActiveStep(0);
     setError(null);
+    sessionStorage.removeItem("slt_active_step");
+    sessionStorage.removeItem("slt_upload_result");
+    sessionStorage.removeItem("slt_report_result");
   };
 
   const handleLogout = async () => {
@@ -342,9 +388,6 @@ export default function UserDashboard() {
                   <Box>
                     <Typography variant="h5" sx={{ fontWeight: 900, color: "#082f49" }}>
                       Source Workbooks
-                    </Typography>
-                    <Typography variant="body2" sx={{ mt: 0.75, color: "#64748b", fontWeight: 600 }}>
-                      Current and previous trial balances are required. Admin defaults can cover budget and mapping.
                     </Typography>
                   </Box>
                   <Chip
@@ -531,8 +574,7 @@ export default function UserDashboard() {
 
                   <ReportSummaryActions
                     reportResult={reportResult}
-                    onDownloadUnmapped={handleUnmappedDownload}
-                    unmappedLoading={unmappedLoading}
+                    sessionId={uploadResult?.session_id}
                   />
 
                   {activeStep > 0 && (
