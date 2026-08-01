@@ -248,11 +248,10 @@ export default function UserDashboard() {
                     key={label}
                     type="button"
                     onClick={() => navigate(path)}
-                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${
-                      active
+                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${active
                         ? "bg-white text-[#071b2a] shadow-lg"
                         : "text-slate-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                      }`}
                   >
                     <Icon fontSize="small" />
                     <span>{label}</span>
@@ -361,195 +360,195 @@ export default function UserDashboard() {
                   />
                 </Box>
 
-          <Grid container spacing={3}>
-            {FILE_CONFIGS.map((config) => {
-              const isDefaultActive =
-                (config.key === "budget" && adminConfig.default_budget_active) ||
-                (config.key === "mapping" && adminConfig.default_mapping_active);
-              const isUploaded = !!files[config.key];
+                <Grid container spacing={3}>
+                  {FILE_CONFIGS.map((config) => {
+                    const isDefaultActive =
+                      (config.key === "budget" && adminConfig.default_budget_active) ||
+                      (config.key === "mapping" && adminConfig.default_mapping_active);
+                    const isUploaded = !!files[config.key];
 
-              return (
-                <Grid item xs={12} sm={6} key={config.key}>
-                  <Card
-                    variant="outlined"
-                    sx={{
-                      height: "100%",
-                      borderColor: isUploaded ? config.color : isDefaultActive ? "#86C35C" : "#DCE5EE",
-                      borderWidth: 1,
-                      borderRadius: 2,
-                      backgroundColor: !isUploaded && isDefaultActive ? "#F8FCF6" : "#FFFFFF",
-                      transition: "all 0.2s",
-                      boxShadow: "0 10px 24px rgba(15, 23, 42, 0.045)",
-                      "&:hover": { borderColor: config.color, transform: "translateY(-2px)", boxShadow: "0 16px 34px rgba(15, 23, 42, 0.09)" },
-                    }}
-                  >
-                    <CardContent sx={{ p: 3 }}>
-                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
-                        <Box sx={{ display: "flex", alignItems: "center" }}>
-                          <Box sx={{ width: 38, height: 38, borderRadius: 1.5, display: "grid", placeItems: "center", backgroundColor: `${config.color}14`, mr: 1.5 }}>
-                            <FileIcon sx={{ color: config.color, fontSize: 21 }} />
-                          </Box>
-                          <Typography variant="subtitle1" sx={{ fontWeight: 900, color: "#1f2937" }}>
-                            {config.label}
-                          </Typography>
-                        </Box>
-                        {!isUploaded && isDefaultActive && (
-                          <Chip
-                            label="Admin Default Active"
-                            color="success"
-                            size="small"
-                            variant="outlined"
-                            sx={{ height: 22, fontSize: "0.68rem", fontWeight: 800 }}
-                          />
-                        )}
-                      </Box>
-
-                      {isUploaded ? (
-                        <Box>
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 700, wordBreak: "break-word" }}>
-                            {files[config.key].name}
-                          </Typography>
-                          <Box sx={{ display: "flex", gap: 1 }}>
-                            <Button
-                              size="small"
-                              component="label"
-                              variant="outlined"
-                              sx={{ textTransform: "none", fontWeight: 800, borderRadius: 1.5 }}
-                            >
-                              Replace Custom
-                              <input
-                                type="file"
-                                accept={config.accept}
-                                hidden
-                                onChange={(e) => handleFileChange(config.key, e)}
-                              />
-                            </Button>
-                            <IconButton
-                              size="small"
-                              color="error"
-                              onClick={() => handleRemoveFile(config.key)}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Box>
-                        </Box>
-                      ) : isDefaultActive ? (
-                        <Box>
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontStyle: "italic" }}>
-                            Using {getDefaultLabel(config.key)} configured by administrator
-                          </Typography>
-                          <Button
-                            size="small"
-                            component="label"
-                            variant="outlined"
-                            sx={{ textTransform: "none", color: config.color, borderColor: config.color, fontWeight: 800, borderRadius: 1.5 }}
-                          >
-                            Upload Custom Override
-                            <input
-                              type="file"
-                              accept={config.accept}
-                              hidden
-                              onChange={(e) => handleFileChange(config.key, e)}
-                            />
-                          </Button>
-                        </Box>
-                      ) : (
-                        <Button
-                          component="label"
+                    return (
+                      <Grid item xs={12} sm={6} key={config.key}>
+                        <Card
                           variant="outlined"
-                          fullWidth
-                          startIcon={<UploadIcon />}
                           sx={{
-                            mt: 1,
-                            py: 2,
-                            borderStyle: "dashed",
-                            textTransform: "none",
-                            fontWeight: 900,
-                            borderRadius: 1.5,
-                            color: config.color,
-                            borderColor: config.color,
-                            "&:hover": {
-                              borderStyle: "solid",
-                              backgroundColor: `${config.color}10`,
-                            },
+                            height: "100%",
+                            borderColor: isUploaded ? config.color : isDefaultActive ? "#86C35C" : "#DCE5EE",
+                            borderWidth: 1,
+                            borderRadius: 2,
+                            backgroundColor: !isUploaded && isDefaultActive ? "#F8FCF6" : "#FFFFFF",
+                            transition: "all 0.2s",
+                            boxShadow: "0 10px 24px rgba(15, 23, 42, 0.045)",
+                            "&:hover": { borderColor: config.color, transform: "translateY(-2px)", boxShadow: "0 16px 34px rgba(15, 23, 42, 0.09)" },
                           }}
                         >
-                          Click to upload
-                          <input
-                            type="file"
-                            accept={config.accept}
-                            hidden
-                            onChange={(e) => handleFileChange(config.key, e)}
-                          />
-                        </Button>
-                      )}
-                    </CardContent>
-                  </Card>
+                          <CardContent sx={{ p: 3 }}>
+                            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+                              <Box sx={{ display: "flex", alignItems: "center" }}>
+                                <Box sx={{ width: 38, height: 38, borderRadius: 1.5, display: "grid", placeItems: "center", backgroundColor: `${config.color}14`, mr: 1.5 }}>
+                                  <FileIcon sx={{ color: config.color, fontSize: 21 }} />
+                                </Box>
+                                <Typography variant="subtitle1" sx={{ fontWeight: 900, color: "#1f2937" }}>
+                                  {config.label}
+                                </Typography>
+                              </Box>
+                              {!isUploaded && isDefaultActive && (
+                                <Chip
+                                  label="Admin Default Active"
+                                  color="success"
+                                  size="small"
+                                  variant="outlined"
+                                  sx={{ height: 22, fontSize: "0.68rem", fontWeight: 800 }}
+                                />
+                              )}
+                            </Box>
+
+                            {isUploaded ? (
+                              <Box>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 700, wordBreak: "break-word" }}>
+                                  {files[config.key].name}
+                                </Typography>
+                                <Box sx={{ display: "flex", gap: 1 }}>
+                                  <Button
+                                    size="small"
+                                    component="label"
+                                    variant="outlined"
+                                    sx={{ textTransform: "none", fontWeight: 800, borderRadius: 1.5 }}
+                                  >
+                                    Replace Custom
+                                    <input
+                                      type="file"
+                                      accept={config.accept}
+                                      hidden
+                                      onChange={(e) => handleFileChange(config.key, e)}
+                                    />
+                                  </Button>
+                                  <IconButton
+                                    size="small"
+                                    color="error"
+                                    onClick={() => handleRemoveFile(config.key)}
+                                  >
+                                    <DeleteIcon fontSize="small" />
+                                  </IconButton>
+                                </Box>
+                              </Box>
+                            ) : isDefaultActive ? (
+                              <Box>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontStyle: "italic" }}>
+                                  Using {getDefaultLabel(config.key)} configured by administrator
+                                </Typography>
+                                <Button
+                                  size="small"
+                                  component="label"
+                                  variant="outlined"
+                                  sx={{ textTransform: "none", color: config.color, borderColor: config.color, fontWeight: 800, borderRadius: 1.5 }}
+                                >
+                                  Upload Custom Override
+                                  <input
+                                    type="file"
+                                    accept={config.accept}
+                                    hidden
+                                    onChange={(e) => handleFileChange(config.key, e)}
+                                  />
+                                </Button>
+                              </Box>
+                            ) : (
+                              <Button
+                                component="label"
+                                variant="outlined"
+                                fullWidth
+                                startIcon={<UploadIcon />}
+                                sx={{
+                                  mt: 1,
+                                  py: 2,
+                                  borderStyle: "dashed",
+                                  textTransform: "none",
+                                  fontWeight: 900,
+                                  borderRadius: 1.5,
+                                  color: config.color,
+                                  borderColor: config.color,
+                                  "&:hover": {
+                                    borderStyle: "solid",
+                                    backgroundColor: `${config.color}10`,
+                                  },
+                                }}
+                              >
+                                Click to upload
+                                <input
+                                  type="file"
+                                  accept={config.accept}
+                                  hidden
+                                  onChange={(e) => handleFileChange(config.key, e)}
+                                />
+                              </Button>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    );
+                  })}
                 </Grid>
-              );
-            })}
-          </Grid>
 
-          {loading && <LinearProgress sx={{ mt: 3, height: 7, borderRadius: 999 }} />}
+                {loading && <LinearProgress sx={{ mt: 3, height: 7, borderRadius: 999 }} />}
 
-          <Box sx={{ mt: 3, display: "flex", gap: 1.5, flexWrap: "wrap", alignItems: "center" }}>
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={<ReportIcon />}
-              disabled={!allFilesUploaded || loading}
-              onClick={handleUploadAndGenerate}
-              sx={{
-                backgroundColor: "#0B3041",
-                textTransform: "none",
-                fontWeight: 900,
-                borderRadius: 1.5,
-                px: 4,
-                "&:hover": { backgroundColor: "#143D52" },
-              }}
-            >
-              Generate Report
-            </Button>
+                <Box sx={{ mt: 3, display: "flex", gap: 1.5, flexWrap: "wrap", alignItems: "center" }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    startIcon={<ReportIcon />}
+                    disabled={!allFilesUploaded || loading}
+                    onClick={handleUploadAndGenerate}
+                    sx={{
+                      backgroundColor: "#0B3041",
+                      textTransform: "none",
+                      fontWeight: 900,
+                      borderRadius: 1.5,
+                      px: 4,
+                      "&:hover": { backgroundColor: "#143D52" },
+                    }}
+                  >
+                    Generate Report
+                  </Button>
 
-            {reportResult && (
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<DownloadIcon />}
-                onClick={handleDownload}
-                sx={{
-                backgroundColor: "#7AB648",
-                textTransform: "none",
-                fontWeight: 900,
-                borderRadius: 1.5,
-                px: 4,
-                  "&:hover": { backgroundColor: "#6AA038" },
-                }}
-              >
-              Download PowerPoint
-            </Button>
-          )}
+                  {reportResult && (
+                    <Button
+                      variant="contained"
+                      size="large"
+                      startIcon={<DownloadIcon />}
+                      onClick={handleDownload}
+                      sx={{
+                        backgroundColor: "#7AB648",
+                        textTransform: "none",
+                        fontWeight: 900,
+                        borderRadius: 1.5,
+                        px: 4,
+                        "&:hover": { backgroundColor: "#6AA038" },
+                      }}
+                    >
+                      Download PowerPoint
+                    </Button>
+                  )}
 
-            <ReportSummaryActions
-              reportResult={reportResult}
-              onDownloadUnmapped={handleUnmappedDownload}
-              unmappedLoading={unmappedLoading}
-            />
+                  <ReportSummaryActions
+                    reportResult={reportResult}
+                    onDownloadUnmapped={handleUnmappedDownload}
+                    unmappedLoading={unmappedLoading}
+                  />
 
-            {activeStep > 0 && (
-              <Button
-                variant="outlined"
-                size="large"
-                onClick={handleReset}
-                disabled={loading}
-                startIcon={<RefreshIcon />}
-                sx={{ textTransform: "none", fontWeight: 900, borderRadius: 1.5 }}
-              >
-                Reset
-              </Button>
-            )}
-          </Box>
-        </Paper>
+                  {activeStep > 0 && (
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      onClick={handleReset}
+                      disabled={loading}
+                      startIcon={<RefreshIcon />}
+                      sx={{ textTransform: "none", fontWeight: 900, borderRadius: 1.5 }}
+                    >
+                      Reset
+                    </Button>
+                  )}
+                </Box>
+              </Paper>
             </div>
 
             <footer className="border-t border-slate-200 bg-white px-4 py-5 md:px-8 lg:px-10">
