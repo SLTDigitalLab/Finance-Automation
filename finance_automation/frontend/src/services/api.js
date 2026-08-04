@@ -165,7 +165,40 @@ export async function generateUnmappedReport(sessionId) {
     throw new Error(await readApiError(response, "Unmapped report generation failed"));
   }
 
-  return response.json();
+  const result = await response.json();
+  if (result.status === "success") {
+    return result;
+  }
+  if (result.status === "error") {
+    throw new Error(result.message || "Unmapped report generation failed");
+  }
+
+  // status === "processing" — poll until done
+  return pollUnmappedStatus(sessionId);
+}
+
+export async function pollUnmappedStatus(sessionId) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(2000);
+
+    const response = await fetch(`${API_BASE}/unmapped-status/${sessionId}`, {
+      headers: getAuthHeaders(),
+    });
+
+    if (!response.ok) {
+      throw new Error(await readApiError(response, "Failed to fetch unmapped report status"));
+    }
+
+    const result = await response.json();
+    if (result.status === "success") {
+      return result;
+    }
+    if (result.status === "error") {
+      throw new Error(result.message || "Unmapped report generation failed");
+    }
+  }
+
+  throw new Error("Unmapped report is taking longer than expected. Please try again later.");
 }
 
 export function getUnmappedDownloadUrl(filename) {

@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api", tags=["finance"])
 
 uploaded_files_store: dict = {}
 report_jobs: dict = {}
+unmapped_jobs: dict = {}
 
 
 def _db_save_job(session_id: str, status: str, result: dict | None = None):
@@ -1171,11 +1172,82 @@ def _write_summary_and_detail_sheets(
         ws.column_dimensions["Q"].width = 50
 
 
+def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
+    """Background worker: builds the unmapped Excel and stores result in unmapped_jobs."""
+    import pandas as pd
+    db = SessionLocal()
+    try:
+        file_paths = _get_session_files(session_id)
+        if not file_paths:
+            raise ValueError(
+                "Upload session expired or files are not available. "
+                "Please upload the files and generate the report again."
+            )
+
+        cy_unmapped, py_unmapped, report_month, report_year = _get_or_compute_unmapped_dfs(session_id, file_paths)
+
+        if cy_unmapped is None or py_unmapped is None:
+            raise ValueError("Unmapped data not available. Please generate the report first.")
+
+        output_filename = f"Unmapped_Rows_{report_month}_{report_year}.xlsx"
+        output_path = settings.OUTPUT_DIR / output_filename
+
+        display_cols = [
+            "gl_code", "description", "flexfield", "cost_center", "location",
+            "business_line", "product", "account", "technology", "intercompany",
+            "project", "beginning_balance", "period_activity", "ending_balance",
+        ]
+
+        with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
+            if not cy_unmapped.empty:
+                cy_export = cy_unmapped[[c for c in display_cols if c in cy_unmapped.columns]].copy()
+                cy_export.to_excel(writer, sheet_name="CY Unmapped", index=False)
+            else:
+                pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="CY Unmapped", index=False)
+
+            if not py_unmapped.empty:
+                py_export = py_unmapped[[c for c in display_cols if c in py_unmapped.columns]].copy()
+                py_export.to_excel(writer, sheet_name="PY Unmapped", index=False)
+            else:
+                pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="PY Unmapped", index=False)
+
+            _write_summary_and_detail_sheets(writer, cy_unmapped, py_unmapped, report_month, report_year)
+
+        cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
+        py_count = len(py_unmapped) if not py_unmapped.empty else 0
+        logger.info(f"Unmapped report generated: {output_filename} (CY: {cy_count}, PY: {py_count})")
+
+        log_audit(
+            db=db,
+            action="Unmapped Report Generation",
+            module="Finance",
+            description=f"Generated unmapped rows Excel report. Filename: {output_filename}, Month: {report_month}, Year: {report_year}, CY: {cy_count}, PY: {py_count}",
+            user_id=user_id,
+            user_name=user_name,
+        )
+
+        job_data = {
+            "status": "success",
+            "filename": output_filename,
+            "cy_unmapped_count": cy_count,
+            "py_unmapped_count": py_count,
+        }
+        unmapped_jobs[session_id] = job_data
+        _db_save_job(f"unmapped_{session_id}", "success", job_data)
+
+    except Exception as e:
+        logger.exception(f"Unmapped job failed for session {session_id}: {e}")
+        error_data = {"status": "error", "message": str(e)}
+        unmapped_jobs[session_id] = error_data
+        _db_save_job(f"unmapped_{session_id}", "error", error_data)
+    finally:
+        db.close()
+
+
 @router.post("/generate-unmapped")
 async def generate_unmapped_report(
-    request: Request,
+    background_tasks: BackgroundTasks,
     session_id: str = Query(""),
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     if not session_id:
@@ -1184,8 +1256,13 @@ async def generate_unmapped_report(
             detail="Invalid or missing session_id. Generate report first.",
         )
 
-    file_paths = _get_session_files(session_id)
-    if not file_paths:
+    # Return cached result if already done
+    existing = unmapped_jobs.get(session_id)
+    if existing and existing.get("status") in ("success", "error"):
+        return existing
+
+    # Validate session files exist before enqueuing
+    if not _get_session_files(session_id):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1194,92 +1271,38 @@ async def generate_unmapped_report(
             ),
         )
 
-    cy_unmapped, py_unmapped, report_month, report_year = _get_or_compute_unmapped_dfs(session_id, file_paths)
+    # Already in progress?
+    if existing and existing.get("status") == "processing":
+        return existing
 
-    if cy_unmapped is None or py_unmapped is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Unmapped data not available. Please generate the report first.",
-        )
+    _db_save_job(f"unmapped_{session_id}", "processing")
+    unmapped_jobs[session_id] = {"status": "processing", "message": "Unmapped report generation started."}
+    background_tasks.add_task(_run_unmapped_job, session_id, current_user.id, current_user.full_name)
 
-    try:
-        import pandas as pd
+    return unmapped_jobs[session_id]
 
-        output_filename = f"Unmapped_Rows_{report_month}_{report_year}.xlsx"
-        output_path = settings.OUTPUT_DIR / output_filename
 
-        display_cols = [
-            "gl_code",
-            "description",
-            "flexfield",
-            "cost_center",
-            "location",
-            "business_line",
-            "product",
-            "account",
-            "technology",
-            "intercompany",
-            "project",
-            "beginning_balance",
-            "period_activity",
-            "ending_balance",
-        ]
+@router.get("/unmapped-status/{session_id}")
+async def get_unmapped_status(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    # Check in-memory first
+    job = unmapped_jobs.get(session_id)
+    if job and job.get("status") in ("success", "error"):
+        return job
 
-        with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
-            if not cy_unmapped.empty:
-                cy_export = cy_unmapped[
-                    [c for c in display_cols if c in cy_unmapped.columns]
-                ].copy()
-                cy_export.to_excel(writer, sheet_name="CY Unmapped", index=False)
-            else:
-                pd.DataFrame(columns=display_cols).to_excel(
-                    writer, sheet_name="CY Unmapped", index=False
-                )
+    # Fall back to DB (cross-worker)
+    db_result = _db_load_job(f"unmapped_{session_id}")
+    if db_result:
+        if db_result.get("status") in ("success", "error"):
+            unmapped_jobs[session_id] = db_result
+        return db_result
 
-            if not py_unmapped.empty:
-                py_export = py_unmapped[
-                    [c for c in display_cols if c in py_unmapped.columns]
-                ].copy()
-                py_export.to_excel(writer, sheet_name="PY Unmapped", index=False)
-            else:
-                pd.DataFrame(columns=display_cols).to_excel(
-                    writer, sheet_name="PY Unmapped", index=False
-                )
+    if job:
+        return job
 
-            _write_summary_and_detail_sheets(
-                writer, cy_unmapped, py_unmapped, report_month, report_year
-            )
-
-        cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
-        py_count = len(py_unmapped) if not py_unmapped.empty else 0
-        logger.info(
-            f"Unmapped report generated: {output_filename} (CY: {cy_count}, PY: {py_count})"
-        )
-
-        log_audit(
-            db=db,
-            action="Unmapped Report Generation",
-            module="Finance",
-            description=f"Generated unmapped rows Excel report. Filename: {output_filename}, Month: {report_month}, Year: {report_year}, CY: {cy_count}, PY: {py_count}",
-            user_id=current_user.id,
-            user_name=current_user.full_name,
-            request=request
-        )
-
-        return {
-            "status": "success",
-            "filename": output_filename,
-            "cy_unmapped_count": cy_count,
-            "py_unmapped_count": py_count,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error generating unmapped report: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Unmapped report generation failed: {str(e)}"
-        )
+    return {"status": "processing", "message": "Waiting for unmapped report generation to start."}
 
 
 @router.get("/download-unmapped/{filename}")
