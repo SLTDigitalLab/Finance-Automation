@@ -910,6 +910,13 @@ def _write_summary_and_detail_sheets(
             info["how_to_fix"],
             priority,
         ])
+        
+        # Make Detail Sheet name clickable
+        link_cell = ws_summary.cell(row=ws_summary.max_row, column=3)
+        link_cell.hyperlink = f"#'{sheet_label}'!A1"
+        link_cell.style = "Hyperlink"
+        
+        
         total_cy_pa += row["CY_PA"]
         total_cy_rows += int(row["CY_Rows"])
         total_py_rows += int(row["PY_Rows"])
@@ -952,6 +959,9 @@ def _write_summary_and_detail_sheets(
     ws_summary.column_dimensions["G"].width = 50
     ws_summary.column_dimensions["H"].width = 65
     ws_summary.column_dimensions["I"].width = 12
+    
+    # Keep summary header visible while scrolling
+    ws_summary.freeze_panes = "A5"
 
     # ----------------------------------------------------
     # DETAIL SHEETS GENERATION (FAST SINGLE PASS)
@@ -1029,12 +1039,19 @@ def _write_summary_and_detail_sheets(
         ws.append([])
         ws.append(detail_cols)
         hdr_r = ws.max_row
+        ws.auto_filter.ref = ws.dimensions
         for c in range(1, len(detail_cols) + 1):
             cell = ws.cell(row=hdr_r, column=c)
             cell.font = hdr_font
             cell.fill = hdr_fill
             cell.alignment = hdr_align
             cell.border = thin_border
+            
+            # Keep detail sheet headers visible
+        ws.freeze_panes = "A7"
+        
+        # Enable filters on the header row
+        ws.auto_filter.ref = f"A{hdr_r}:Q{hdr_r}"
 
         for row_i, r in enumerate(records):
             gl_val = str(r.get("gl_code") or "").strip()
@@ -1078,24 +1095,35 @@ def _write_summary_and_detail_sheets(
             curr_r = ws.max_row
             is_alt = row_i % 2 == 1
 
-            # Single-pass cell styling during row insertion
-            for col_i in range(1, len(detail_cols) + 1):
-                cell = ws.cell(row=curr_r, column=col_i)
-                cell.font = data_font
-                cell.border = thin_border
-                cell.alignment = align_center
+                    # Single-pass cell styling during row insertion
+        for col_i in range(1, len(detail_cols) + 1):
+            cell = ws.cell(row=curr_r, column=col_i)
+            cell.font = data_font
+            cell.border = thin_border
+            cell.alignment = align_center
 
-                if target_seg == "account" and col_i in (2, 9):
-                    cell.fill = amber_fill
-                    cell.font = amber_font
-                elif target_seg == "product" and col_i == 8:
-                    cell.fill = amber_fill
-                    cell.font = amber_font
-                elif target_seg == "business_line" and col_i == 7:
-                    cell.fill = amber_fill
-                    cell.font = amber_font
-                elif is_alt:
-                    cell.fill = alt_fill
+            if target_seg == "account" and col_i in (2, 9):
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            elif target_seg == "product" and col_i == 8:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            elif target_seg == "business_line" and col_i == 7:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            # Highlight Unmapped Reason column
+            elif col_i == 17:
+                cell.fill = PatternFill(
+                    start_color="FFF2CC",
+                    end_color="FFF2CC",
+                    fill_type="solid"
+                )
+
+            elif is_alt:
+                cell.fill = alt_fill
 
         ws.append([])
         ws.append([
