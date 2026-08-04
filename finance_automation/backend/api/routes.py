@@ -626,6 +626,552 @@ def _get_or_compute_unmapped_dfs(session_id: str, file_paths: dict):
     return cy_unmapped, py_unmapped, report_month, report_year
 
 
+def _write_summary_and_detail_sheets(
+    writer, cy_unmapped, py_unmapped, report_month, report_year
+):
+    import pandas as pd
+    import re as _re
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
+    py_count = len(py_unmapped) if not py_unmapped.empty else 0
+
+    def _num(df, col):
+        return pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0)
+
+    def _fmt_pa(val):
+        if val == 0:
+            return "0"
+        sign = "+" if val > 0 else ""
+        return f"{sign}{val:,.0f}"
+
+    def _categorize_reason(reason):
+        if reason.startswith("International filter:"):
+            m = _re.search(r"BL (\d+)", reason)
+            bl = m.group(1) if m else "?"
+            return "International BL Filter", bl, reason
+        if reason.startswith("Equipment Sales filter:"):
+            m = _re.search(r"Account (\d+)", reason)
+            acct = m.group(1) if m else "?"
+            return "Equipment Sales Cleanup", acct, reason
+        if reason.startswith("GL ") and "not covered" in reason:
+            m = _re.search(r"GL (\d+)", reason)
+            acct = m.group(1) if m else "?"
+            return "GL Account Not Covered", acct, reason
+        if "Product" in reason and "outside" in reason:
+            m = _re.search(r"Product (\d+).*GL (\d+)", reason)
+            key = f"P{m.group(1)}_GL{m.group(2)}" if m else reason[:30]
+            return "Product Range Gap", key, reason
+        if "BL" in reason and "outside" in reason:
+            m = _re.search(r"BL (\d+)", reason)
+            bl = m.group(1) if m else "?"
+            return "BL Range Gap", bl, reason
+        return "Other", reason[:40], reason
+
+    def _get_category_info(issue_name: str, issue_key: str, sample_reason: str, sample_row: dict = None):
+        gl_code = ""
+        product_code = ""
+        bl_code = ""
+        if sample_row:
+            gl_code = str(sample_row.get("gl_code") or "").strip()
+            product_code = str(sample_row.get("product") or "").strip()
+            bl_code = str(sample_row.get("business_line") or "").strip()
+
+        if not gl_code and issue_key and issue_key.isdigit() and len(issue_key) >= 6:
+            gl_code = issue_key
+
+        if issue_name == "GL Account Not Covered":
+            gl_str = f"[{gl_code}]" if gl_code else "[GL_Code]"
+            desc = "This General Ledger account recorded revenue activity in the Trial Balance but is completely missing from your master mapping rules."
+            action = f"Open 'Revenue Mapping Workbook' -> Navigate to 'Code Mapping' sheet -> Append GL Code {gl_str} and assign its appropriate Revenue Category."
+            target_seg = "account"
+        elif issue_name == "Product Range Gap":
+            gl_str = f"[{gl_code}]" if gl_code else "[GL_Code]"
+            prod_str = f"[{product_code}]" if product_code else "[Product_Code]"
+            desc = f"The GL account is mapped, but Product Segment {prod_str} falls outside the mapped Product Range defined for this account."
+            action = f"Open 'Revenue Mapping Workbook' -> Locate GL Code {gl_str} -> Extend the Start/End Product Range to include Product {prod_str}."
+            target_seg = "product"
+        elif issue_name == "BL Range Gap":
+            gl_str = f"[{gl_code}]" if gl_code else "[GL_Code]"
+            bl_str = f"[{bl_code}]" if bl_code else "[BL_Code]"
+            desc = f"Business Line Segment {bl_str} is not covered under the mapped ranges for this GL account."
+            action = f"Open 'Revenue Mapping Workbook' -> Locate GL Code {gl_str} -> Update Business Line range to cover code {bl_str}."
+            target_seg = "business_line"
+        elif issue_name in ["International BL Filter", "Equipment Sales Cleanup"] or "Filter" in issue_name:
+            bl_str = f"[{bl_code}]" if bl_code else "[BL_Code]"
+            gl_str = f"[{gl_code}]" if gl_code else "[GL_Code]"
+            desc = "The row hit a domain-specific filter rule (e.g., Equipment Sales/International) and was bypassed by standard category logic."
+            action = f"Review domain filter rules in 'Revenue Mapping Workbook' -> Confirm if Business Line {bl_str} or Account {gl_str} requires dedicated override classification."
+            target_seg = "business_line" if issue_name == "International BL Filter" else "account"
+        else:
+            desc = "Unmapped combination of GL Account, Product, and Business Line segments in the Code Mapping workbook."
+            action = "Open 'Revenue Mapping Workbook' -> Check 'Code Mapping' sheet -> Ensure GL, Product, and Business Line segments cover this row."
+            target_seg = "account"
+
+        return {
+            "finance_explanation": desc,
+            "how_to_fix": action,
+            "target_segment": target_seg,
+        }
+
+    _DARK_BLUE = "1F3864"
+    _MED_BLUE = "2E75B6"
+    _LIGHT_BLUE = "D6E4F0"
+    _WHITE = "FFFFFF"
+    _LIGHT_GRAY = "F2F2F2"
+    _RED = "C00000"
+    _AMBER_FILL = "FFF2CC"
+    _AMBER_TEXT = "7F6000"
+
+    hdr_font = Font(name="Calibri", bold=True, color=_WHITE, size=11)
+    hdr_fill = PatternFill(start_color=_MED_BLUE, end_color=_MED_BLUE, fill_type="solid")
+    hdr_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    title_font = Font(name="Calibri", bold=True, color=_WHITE, size=14)
+    title_fill = PatternFill(start_color=_DARK_BLUE, end_color=_DARK_BLUE, fill_type="solid")
+
+    subtitle_font = Font(name="Calibri", bold=True, color=_DARK_BLUE, size=11)
+
+    total_font = Font(name="Calibri", bold=True, size=11)
+    total_fill = PatternFill(start_color=_LIGHT_BLUE, end_color=_LIGHT_BLUE, fill_type="solid")
+
+    data_font = Font(name="Calibri", size=10)
+    alt_fill = PatternFill(start_color=_LIGHT_GRAY, end_color=_LIGHT_GRAY, fill_type="solid")
+
+    amber_fill = PatternFill(start_color=_AMBER_FILL, end_color=_AMBER_FILL, fill_type="solid")
+    amber_font = Font(name="Calibri", bold=True, color=_AMBER_TEXT, size=10)
+
+    thin_border = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+    )
+
+    def _auto_width(ws, min_width=10, max_width=65):
+        for col_cells in ws.columns:
+            col_letter = get_column_letter(col_cells[0].column)
+            lengths = []
+            for cell in col_cells:
+                if cell.value is not None:
+                    lengths.append(len(str(cell.value)))
+            if lengths:
+                w = min(max(max(lengths) + 2, min_width), max_width)
+                ws.column_dimensions[col_letter].width = w
+
+    def _style_header_row(ws, row_num, num_cols):
+        for c in range(1, num_cols + 1):
+            cell = ws.cell(row=row_num, column=c)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = hdr_align
+            cell.border = thin_border
+
+    def _style_data_rows(ws, start_row, end_row, num_cols):
+        for r in range(start_row, end_row + 1):
+            is_alt = (r - start_row) % 2 == 1
+            for c in range(1, num_cols + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.font = data_font
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                if is_alt and cell.fill.fill_type != "solid":
+                    cell.fill = alt_fill
+
+    def _style_total_row(ws, row_num, num_cols):
+        for c in range(1, num_cols + 1):
+            cell = ws.cell(row=row_num, column=c)
+            cell.font = total_font
+            cell.fill = total_fill
+            cell.border = thin_border
+
+    if cy_unmapped.empty and py_unmapped.empty:
+        ws = writer.book.create_sheet("SUMMARY")
+        ws.append([f"Unmapped Rows Analysis - {report_month} {report_year}"])
+        ws.append(["No unmapped rows found."])
+        return
+
+    all_parts = []
+    if not cy_unmapped.empty:
+        cy = cy_unmapped.copy()
+        cy["_source"] = "CY"
+        all_parts.append(cy)
+    if not py_unmapped.empty:
+        py = py_unmapped.copy()
+        py["_source"] = "PY"
+        all_parts.append(py)
+    combined = pd.concat(all_parts, ignore_index=True)
+    combined["period_activity"] = _num(combined, "period_activity")
+    combined["ending_balance"] = _num(combined, "ending_balance")
+
+    combined["_issue_name"] = combined["unmapped_reason"].apply(
+        lambda r: _categorize_reason(r)[0]
+    )
+    combined["_issue_key"] = combined["unmapped_reason"].apply(
+        lambda r: _categorize_reason(r)[1]
+    )
+    combined["_issue_reason"] = combined["unmapped_reason"].apply(
+        lambda r: _categorize_reason(r)[2]
+    )
+
+    issue_types = (
+        combined.groupby("_issue_name")
+        .agg(
+            CY_PA=("period_activity", "sum"),
+            CY_Rows=("_source", lambda x: (x == "CY").sum()),
+            PY_Rows=("_source", lambda x: (x == "PY").sum()),
+            Sample_Reason=("_issue_reason", "first"),
+            Sample_Flexfield=("flexfield", "first"),
+            Sample_GL=("gl_code", "first"),
+            Sample_Product=("product", "first"),
+            Sample_BL=("business_line", "first"),
+        )
+        .reset_index()
+    )
+    issue_types["abs_CY_PA"] = issue_types["CY_PA"].abs()
+    issue_types = issue_types.sort_values("abs_CY_PA", ascending=False).drop(
+        columns=["abs_CY_PA"]
+    )
+    issue_types = issue_types.reset_index(drop=True)
+    issue_types.index = issue_types.index + 1
+    issue_types.index.name = "Issue #"
+
+    priority_map = {
+        "International BL Filter": "HIGH",
+        "Equipment Sales Cleanup": "HIGH",
+        "GL Account Not Covered": "MEDIUM",
+        "Product Range Gap": "MEDIUM",
+        "BL Range Gap": "LOW",
+        "Other": "LOW",
+    }
+
+    # ----------------------------------------------------
+    # SUMMARY SHEET GENERATION
+    # ----------------------------------------------------
+    ws_summary = writer.book.create_sheet("SUMMARY", 0)
+
+    ws_summary.append([f"Unmapped Rows Finance Action Guide - {report_month} {report_year}"])
+    ws_summary.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
+    title_cell = ws_summary.cell(row=1, column=1)
+    title_cell.font = title_font
+    title_cell.fill = title_fill
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ws_summary.append([
+        f"CY Total Unmapped: {cy_count} rows ({_fmt_pa(combined[combined['_source']=='CY']['period_activity'].sum())} Rs. PA) | "
+        f"PY Total Unmapped: {py_count} rows | Follow step-by-step instructions below to update Revenue Mapping Workbook."
+    ])
+    ws_summary.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
+    sub_cell = ws_summary.cell(row=2, column=1)
+    sub_cell.font = subtitle_font
+    sub_cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    ws_summary.append([])
+
+    summary_headers = [
+        "Issue #",
+        "Unmapped Category",
+        "Detail Sheet",
+        "CY Rows",
+        "CY PA (Rs.)",
+        "PY Rows",
+        "Finance Description",
+        "How to Fix (Workbook Guide)",
+        "Priority",
+    ]
+    ws_summary.append(summary_headers)
+    _style_header_row(ws_summary, 4, len(summary_headers))
+
+    total_cy_pa = 0
+    total_cy_rows = 0
+    total_py_rows = 0
+    data_start = 5
+    for idx, row in issue_types.iterrows():
+        priority = priority_map.get(row["_issue_name"], "LOW")
+        sheet_label = f"{idx}. {row['_issue_name']}"
+        sample_dict = {
+            "gl_code": row.get("Sample_GL", ""),
+            "product": row.get("Sample_Product", ""),
+            "business_line": row.get("Sample_BL", ""),
+        }
+        info = _get_category_info(
+            row["_issue_name"], row["_issue_name"], row["Sample_Reason"], sample_dict
+        )
+
+        ws_summary.append([
+            idx,
+            row["_issue_name"],
+            sheet_label,
+            int(row["CY_Rows"]),
+            _fmt_pa(row["CY_PA"]),
+            int(row["PY_Rows"]),
+            info["finance_explanation"],
+            info["how_to_fix"],
+            priority,
+        ])
+        
+        # Make Detail Sheet name clickable
+        link_cell = ws_summary.cell(row=ws_summary.max_row, column=3)
+        link_cell.hyperlink = f"#'{sheet_label}'!A1"
+        link_cell.style = "Hyperlink"
+        
+        
+        total_cy_pa += row["CY_PA"]
+        total_cy_rows += int(row["CY_Rows"])
+        total_py_rows += int(row["PY_Rows"])
+
+    data_end = data_start + len(issue_types) - 1
+    _style_data_rows(ws_summary, data_start, data_end, len(summary_headers))
+
+    for r in range(data_start, data_end + 1):
+        prio_cell = ws_summary.cell(row=r, column=9)
+        if prio_cell.value == "HIGH":
+            prio_cell.font = Font(name="Calibri", bold=True, color=_RED, size=10)
+
+    ws_summary.append([])
+    total_row_num = data_end + 2
+    ws_summary.append([
+        "TOTAL",
+        "",
+        "",
+        total_cy_rows,
+        _fmt_pa(total_cy_pa),
+        total_py_rows,
+        "",
+        "",
+        "",
+    ])
+    _style_total_row(ws_summary, total_row_num, len(summary_headers))
+
+    ws_summary.append([
+        f"Current Generated Total Revenue YTD includes these unmapped amounts. "
+        f"Total unmapped CY PA: {_fmt_pa(total_cy_pa)} Rs."
+    ])
+    _auto_width(ws_summary)
+
+    ws_summary.column_dimensions["A"].width = 10
+    ws_summary.column_dimensions["B"].width = 28
+    ws_summary.column_dimensions["C"].width = 28
+    ws_summary.column_dimensions["D"].width = 12
+    ws_summary.column_dimensions["E"].width = 18
+    ws_summary.column_dimensions["F"].width = 12
+    ws_summary.column_dimensions["G"].width = 50
+    ws_summary.column_dimensions["H"].width = 65
+    ws_summary.column_dimensions["I"].width = 12
+    
+    # Keep summary header visible while scrolling
+    ws_summary.freeze_panes = "A5"
+
+    # ----------------------------------------------------
+    # DETAIL SHEETS GENERATION (FAST SINGLE PASS)
+    # ----------------------------------------------------
+    detail_cols = [
+        "Source",
+        "GL Code",
+        "Description",
+        "Flexfield",
+        "Cost Center",
+        "Location",
+        "Business Line",
+        "Product",
+        "Account",
+        "Technology",
+        "Intercompany",
+        "Project",
+        "Beginning Balance",
+        "Period Activity",
+        "Ending Balance",
+        "Suggested Fix / Required Action",
+        "Unmapped Reason",
+    ]
+
+    align_center = Alignment(vertical="center", wrap_text=True)
+
+    for issue_idx, (issue_name, type_df) in enumerate(
+        combined.groupby("_issue_name"), start=1
+    ):
+        cy_type = type_df[type_df["_source"] == "CY"]
+        py_type = type_df[type_df["_source"] == "PY"]
+        cy_type_pa = cy_type["period_activity"].sum()
+        cy_type_rows = len(cy_type)
+        py_type_rows = len(py_type)
+
+        records = type_df.to_dict("records")
+        sample_row_dict = records[0] if records else {}
+        cat_info = _get_category_info(issue_name, issue_name, sample_row_dict)
+        target_seg = cat_info["target_segment"]
+
+        sheet_label = f"{issue_idx}. {issue_name}"
+        ws = writer.book.create_sheet(sheet_label)
+
+        # Header Callout Banner Block
+        ws.append([f"ISSUE RESOLUTION GUIDE: {issue_idx}. {issue_name}"])
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=17)
+        c1 = ws.cell(row=1, column=1)
+        c1.font = title_font
+        c1.fill = title_fill
+        c1.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 28
+
+        ws.append([f"EXPLANATION: {cat_info['finance_explanation']}"])
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=17)
+        c2 = ws.cell(row=2, column=1)
+        c2.font = Font(name="Calibri", bold=True, color=_DARK_BLUE, size=10)
+        c2.fill = PatternFill(start_color=_LIGHT_BLUE, end_color=_LIGHT_BLUE, fill_type="solid")
+        c2.alignment = Alignment(horizontal="left", vertical="center")
+
+        ws.append([f"ACTION REQUIRED: {cat_info['how_to_fix']}"])
+        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=17)
+        c3 = ws.cell(row=3, column=1)
+        c3.font = Font(name="Calibri", bold=True, color="7F6000", size=10)
+        c3.fill = amber_fill
+
+        ws.append([
+            f"IMPACT METRICS: CY Total: {cy_type_rows} rows ({_fmt_pa(cy_type_pa)} Rs. PA) | "
+            f"PY Total: {py_type_rows} rows | Amber highlighted segment columns indicate the unmapped criteria."
+        ])
+        ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=17)
+        c4 = ws.cell(row=4, column=1)
+        c4.font = Font(name="Calibri", italic=True, size=10)
+        c4.fill = alt_fill
+
+        ws.append([])
+        ws.append(detail_cols)
+        hdr_r = ws.max_row
+        ws.auto_filter.ref = ws.dimensions
+        for c in range(1, len(detail_cols) + 1):
+            cell = ws.cell(row=hdr_r, column=c)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = hdr_align
+            cell.border = thin_border
+            
+            # Keep detail sheet headers visible
+        ws.freeze_panes = "A7"
+        
+        # Enable filters on the header row
+        ws.auto_filter.ref = f"A{hdr_r}:Q{hdr_r}"
+
+        for row_i, r in enumerate(records):
+            gl_val = str(r.get("gl_code") or "").strip()
+            prod_val = str(r.get("product") or "").strip()
+            bl_val = str(r.get("business_line") or "").strip()
+
+            if issue_name == "GL Account Not Covered":
+                row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Add GL Account {gl_val} and assign Revenue Category"
+            elif issue_name == "Product Range Gap":
+                row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Extend Product Range for GL Account {gl_val} to include Product {prod_val}"
+            elif issue_name == "BL Range Gap":
+                row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Update Business Line Range for GL Account {gl_val} to include BL {bl_val}"
+            elif issue_name == "International BL Filter":
+                row_fix = f"Review International BL rule in 'Revenue Mapping Workbook' for Business Line {bl_val} / Account {gl_val}"
+            elif issue_name == "Equipment Sales Cleanup":
+                row_fix = f"Review Equipment Sales account rule in 'Revenue Mapping Workbook' for Account {gl_val}"
+            else:
+                row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Update rule for GL {gl_val}, Product {prod_val}, BL {bl_val}"
+
+            row_data = [
+                r.get("_source", ""),
+                r.get("gl_code", ""),
+                r.get("description", ""),
+                r.get("flexfield", ""),
+                r.get("cost_center", ""),
+                r.get("location", ""),
+                r.get("business_line", ""),
+                r.get("product", ""),
+                r.get("account", ""),
+                r.get("technology", ""),
+                r.get("intercompany", ""),
+                r.get("project", ""),
+                _fmt_pa(r.get("beginning_balance", 0)),
+                _fmt_pa(r.get("period_activity", 0)),
+                _fmt_pa(r.get("ending_balance", 0)),
+                row_fix,
+                r.get("unmapped_reason", ""),
+            ]
+
+            ws.append(row_data)
+            curr_r = ws.max_row
+            is_alt = row_i % 2 == 1
+
+                    # Single-pass cell styling during row insertion
+        for col_i in range(1, len(detail_cols) + 1):
+            cell = ws.cell(row=curr_r, column=col_i)
+            cell.font = data_font
+            cell.border = thin_border
+            cell.alignment = align_center
+
+            if target_seg == "account" and col_i in (2, 9):
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            elif target_seg == "product" and col_i == 8:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            elif target_seg == "business_line" and col_i == 7:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+            # Highlight Unmapped Reason column
+            elif col_i == 17:
+                cell.fill = PatternFill(
+                    start_color="FFF2CC",
+                    end_color="FFF2CC",
+                    fill_type="solid"
+                )
+
+            elif is_alt:
+                cell.fill = alt_fill
+
+        ws.append([])
+        ws.append([
+            "TOTAL",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            _fmt_pa(type_df["beginning_balance"].sum() if "beginning_balance" in type_df.columns else 0),
+            _fmt_pa(cy_type_pa),
+            _fmt_pa(type_df["ending_balance"].sum() if "ending_balance" in type_df.columns else 0),
+            "",
+            "",
+        ])
+        tot_r = ws.max_row
+        for c in range(1, len(detail_cols) + 1):
+            cell = ws.cell(row=tot_r, column=c)
+            cell.font = total_font
+            cell.fill = total_fill
+            cell.border = thin_border
+
+        # Set column dimensions directly
+        ws.column_dimensions["A"].width = 10
+        ws.column_dimensions["B"].width = 16
+        ws.column_dimensions["C"].width = 30
+        ws.column_dimensions["D"].width = 40
+        ws.column_dimensions["E"].width = 12
+        ws.column_dimensions["F"].width = 10
+        ws.column_dimensions["G"].width = 14
+        ws.column_dimensions["H"].width = 12
+        ws.column_dimensions["I"].width = 14
+        ws.column_dimensions["J"].width = 12
+        ws.column_dimensions["K"].width = 14
+        ws.column_dimensions["L"].width = 10
+        ws.column_dimensions["M"].width = 18
+        ws.column_dimensions["N"].width = 18
+        ws.column_dimensions["O"].width = 18
+        ws.column_dimensions["P"].width = 75
+        ws.column_dimensions["Q"].width = 50
+
+
 @router.post("/generate-unmapped")
 async def generate_unmapped_report(
     request: Request,
@@ -679,531 +1225,6 @@ async def generate_unmapped_report(
             "period_activity",
             "ending_balance",
         ]
-
-        def _write_summary_and_detail_sheets(
-            writer, cy_unmapped, py_unmapped, report_month, report_year
-        ):
-            import pandas as pd
-            import re as _re
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            from openpyxl.utils import get_column_letter
-
-            cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
-            py_count = len(py_unmapped) if not py_unmapped.empty else 0
-
-            def _num(df, col):
-                return pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0)
-
-            def _fmt_pa(val):
-                if val == 0:
-                    return "0"
-                sign = "+" if val > 0 else ""
-                return f"{sign}{val:,.0f}"
-
-            def _categorize_reason(reason):
-                if reason.startswith("International filter:"):
-                    m = _re.search(r"BL (\d+)", reason)
-                    bl = m.group(1) if m else "?"
-                    return "International BL Filter", bl, reason
-                if reason.startswith("Equipment Sales filter:"):
-                    m = _re.search(r"Account (\d+)", reason)
-                    acct = m.group(1) if m else "?"
-                    return "Equipment Sales Cleanup", acct, reason
-                if reason.startswith("GL ") and "not covered" in reason:
-                    m = _re.search(r"GL (\d+)", reason)
-                    acct = m.group(1) if m else "?"
-                    return "GL Account Not Covered", acct, reason
-                if "Product" in reason and "outside" in reason:
-                    m = _re.search(r"Product (\d+).*GL (\d+)", reason)
-                    key = f"P{m.group(1)}_GL{m.group(2)}" if m else reason[:30]
-                    return "Product Range Gap", key, reason
-                if "BL" in reason and "outside" in reason:
-                    m = _re.search(r"BL (\d+)", reason)
-                    bl = m.group(1) if m else "?"
-                    return "BL Range Gap", bl, reason
-                return "Other", reason[:40], reason
-
-            _DARK_BLUE = "1F3864"
-            _MED_BLUE = "2E75B6"
-            _LIGHT_BLUE = "D6E4F0"
-            _WHITE = "FFFFFF"
-            _LIGHT_GRAY = "F2F2F2"
-            _RED = "C00000"
-
-            hdr_font = Font(name="Calibri", bold=True, color=_WHITE, size=11)
-            hdr_fill = PatternFill(
-                start_color=_MED_BLUE, end_color=_MED_BLUE, fill_type="solid"
-            )
-            hdr_align = Alignment(
-                horizontal="center", vertical="center", wrap_text=True
-            )
-
-            title_font = Font(name="Calibri", bold=True, color=_WHITE, size=14)
-            title_fill = PatternFill(
-                start_color=_DARK_BLUE, end_color=_DARK_BLUE, fill_type="solid"
-            )
-
-            subtitle_font = Font(name="Calibri", bold=True, color=_DARK_BLUE, size=11)
-
-            total_font = Font(name="Calibri", bold=True, size=11)
-            total_fill = PatternFill(
-                start_color=_LIGHT_BLUE, end_color=_LIGHT_BLUE, fill_type="solid"
-            )
-
-            data_font = Font(name="Calibri", size=10)
-            alt_fill = PatternFill(
-                start_color=_LIGHT_GRAY, end_color=_LIGHT_GRAY, fill_type="solid"
-            )
-
-            thin_border = Border(
-                left=Side(style="thin", color="BFBFBF"),
-                right=Side(style="thin", color="BFBFBF"),
-                top=Side(style="thin", color="BFBFBF"),
-                bottom=Side(style="thin", color="BFBFBF"),
-            )
-
-            def _auto_width(ws, min_width=10, max_width=50):
-                for col_cells in ws.columns:
-                    col_letter = get_column_letter(col_cells[0].column)
-                    lengths = []
-                    for cell in col_cells:
-                        if cell.value is not None:
-                            lengths.append(len(str(cell.value)))
-                    if lengths:
-                        w = min(max(max(lengths) + 2, min_width), max_width)
-                        ws.column_dimensions[col_letter].width = w
-
-            def _style_header_row(ws, row_num, num_cols):
-                for c in range(1, num_cols + 1):
-                    cell = ws.cell(row=row_num, column=c)
-                    cell.font = hdr_font
-                    cell.fill = hdr_fill
-                    cell.alignment = hdr_align
-                    cell.border = thin_border
-
-            def _style_data_rows(ws, start_row, end_row, num_cols):
-                for r in range(start_row, end_row + 1):
-                    is_alt = (r - start_row) % 2 == 1
-                    for c in range(1, num_cols + 1):
-                        cell = ws.cell(row=r, column=c)
-                        cell.font = data_font
-                        cell.border = thin_border
-                        cell.alignment = Alignment(vertical="center", wrap_text=True)
-                        if is_alt:
-                            cell.fill = alt_fill
-
-            def _style_total_row(ws, row_num, num_cols):
-                for c in range(1, num_cols + 1):
-                    cell = ws.cell(row=row_num, column=c)
-                    cell.font = total_font
-                    cell.fill = total_fill
-                    cell.border = thin_border
-
-            if cy_unmapped.empty and py_unmapped.empty:
-                ws = writer.book.create_sheet("SUMMARY")
-                ws.append([f"Unmapped Rows Analysis - {report_month} {report_year}"])
-                ws.append(["No unmapped rows found."])
-                return
-
-            all_parts = []
-            if not cy_unmapped.empty:
-                cy = cy_unmapped.copy()
-                cy["_source"] = "CY"
-                all_parts.append(cy)
-            if not py_unmapped.empty:
-                py = py_unmapped.copy()
-                py["_source"] = "PY"
-                all_parts.append(py)
-            combined = pd.concat(all_parts, ignore_index=True)
-            combined["period_activity"] = _num(combined, "period_activity")
-            combined["ending_balance"] = _num(combined, "ending_balance")
-
-            combined["_issue_name"] = combined["unmapped_reason"].apply(
-                lambda r: _categorize_reason(r)[0]
-            )
-            combined["_issue_key"] = combined["unmapped_reason"].apply(
-                lambda r: _categorize_reason(r)[1]
-            )
-            combined["_issue_reason"] = combined["unmapped_reason"].apply(
-                lambda r: _categorize_reason(r)[2]
-            )
-
-            issue_types = (
-                combined.groupby("_issue_name")
-                .agg(
-                    CY_PA=("period_activity", "sum"),
-                    CY_Rows=("_source", lambda x: (x == "CY").sum()),
-                    PY_Rows=("_source", lambda x: (x == "PY").sum()),
-                    Sample_Reason=("_issue_reason", "first"),
-                    Sample_Flexfield=("flexfield", "first"),
-                )
-                .reset_index()
-            )
-            issue_types["abs_CY_PA"] = issue_types["CY_PA"].abs()
-            issue_types = issue_types.sort_values("abs_CY_PA", ascending=False).drop(
-                columns=["abs_CY_PA"]
-            )
-            issue_types = issue_types.reset_index(drop=True)
-            issue_types.index = issue_types.index + 1
-            issue_types.index.name = "Issue #"
-
-            priority_map = {
-                "International BL Filter": "HIGH",
-                "Equipment Sales Cleanup": "HIGH",
-                "GL Account Not Covered": "MEDIUM",
-                "Product Range Gap": "MEDIUM",
-                "BL Range Gap": "LOW",
-                "Other": "LOW",
-            }
-
-            ws_summary = writer.book.create_sheet("SUMMARY", 0)
-
-            ws_summary.append(
-                [f"Unmapped Rows Analysis - {report_month} {report_year}"]
-            )
-            ws_summary.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
-            title_cell = ws_summary.cell(row=1, column=1)
-            title_cell.font = title_font
-            title_cell.fill = title_fill
-            title_cell.alignment = Alignment(horizontal="center", vertical="center")
-
-            ws_summary.append(
-                [
-                    f"Please check the detail sheets for each unmapped issue below. "
-                    f"CY Total: {cy_count} unmapped rows | PY Total: {py_count} unmapped rows"
-                ]
-            )
-            ws_summary.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
-            sub_cell = ws_summary.cell(row=2, column=1)
-            sub_cell.font = subtitle_font
-            sub_cell.alignment = Alignment(horizontal="left", vertical="center")
-
-            ws_summary.append([])
-
-            summary_headers = [
-                "Issue #",
-                "Unmapped Reason",
-                "Detail Sheet",
-                "CY Rows",
-                "CY PA (Rs.)",
-                "PY Rows",
-                "Sample Flexfield",
-                "Priority",
-            ]
-            ws_summary.append(summary_headers)
-            _style_header_row(ws_summary, 4, len(summary_headers))
-
-            total_cy_pa = 0
-            total_cy_rows = 0
-            total_py_rows = 0
-            data_start = 5
-            for idx, row in issue_types.iterrows():
-                priority = priority_map.get(row["_issue_name"], "LOW")
-                sheet_label = f"{idx}. {row['_issue_name']}"
-                ws_summary.append(
-                    [
-                        idx,
-                        f"{row['_issue_name']}: {row['Sample_Reason'][:80]}",
-                        sheet_label,
-                        int(row["CY_Rows"]),
-                        _fmt_pa(row["CY_PA"]),
-                        int(row["PY_Rows"]),
-                        row["Sample_Flexfield"],
-                        priority,
-                    ]
-                )
-                total_cy_pa += row["CY_PA"]
-                total_cy_rows += int(row["CY_Rows"])
-                total_py_rows += int(row["PY_Rows"])
-
-            data_end = data_start + len(issue_types) - 1
-            _style_data_rows(ws_summary, data_start, data_end, len(summary_headers))
-
-            for r in range(data_start, data_end + 1):
-                prio_cell = ws_summary.cell(row=r, column=8)
-                if prio_cell.value == "HIGH":
-                    prio_cell.font = Font(
-                        name="Calibri", bold=True, color=_RED, size=10
-                    )
-
-            ws_summary.append([])
-            total_row_num = data_end + 2
-            ws_summary.append(
-                [
-                    "TOTAL",
-                    "",
-                    "",
-                    total_cy_rows,
-                    _fmt_pa(total_cy_pa),
-                    total_py_rows,
-                    "",
-                    "",
-                ]
-            )
-            _style_total_row(ws_summary, total_row_num, len(summary_headers))
-
-            ws_summary.append(
-                [
-                    f"Current Generated Total Revenue YTD includes these unmapped amounts. "
-                    f"Total unmapped CY PA: {_fmt_pa(total_cy_pa)} Rs."
-                ]
-            )
-            _auto_width(ws_summary)
-
-            ws_summary.column_dimensions["A"].width = 10
-            ws_summary.column_dimensions["B"].width = 65
-            ws_summary.column_dimensions["C"].width = 30
-            ws_summary.column_dimensions["D"].width = 12
-            ws_summary.column_dimensions["E"].width = 18
-            ws_summary.column_dimensions["F"].width = 12
-            ws_summary.column_dimensions["G"].width = 38
-            ws_summary.column_dimensions["H"].width = 12
-
-            for issue_idx, (issue_name, type_df) in enumerate(
-                combined.groupby("_issue_name"), start=1
-            ):
-                type_df = type_df.copy()
-                cy_type = type_df[type_df["_source"] == "CY"]
-                py_type = type_df[type_df["_source"] == "PY"]
-                cy_type_pa = cy_type["period_activity"].sum()
-                cy_type_eb = cy_type["ending_balance"].sum()
-                cy_type_rows = len(cy_type)
-                py_type_rows = len(py_type)
-
-                sub_groups = (
-                    type_df.groupby("_issue_key")
-                    .agg(
-                        CY_PA=("period_activity", "sum"),
-                        CY_EB=("ending_balance", "sum"),
-                        CY_Rows=("_source", lambda x: (x == "CY").sum()),
-                        PY_Rows=("_source", lambda x: (x == "PY").sum()),
-                        Sample_Flex=("flexfield", "first"),
-                        Sample_Desc=("description", "first"),
-                    )
-                    .reset_index()
-                )
-                sub_groups["abs_PA"] = sub_groups["CY_PA"].abs()
-                sub_groups = sub_groups.sort_values("abs_PA", ascending=False).drop(
-                    columns=["abs_PA"]
-                )
-
-                sheet_label = f"{issue_idx}. {issue_name}"
-                ws = writer.book.create_sheet(sheet_label)
-
-                if issue_name == "International BL Filter":
-                    ws.append(
-                        [
-                            f"CHANGE {issue_idx}: Add BL Filter to International Catch-All Rules"
-                        ]
-                    )
-                elif issue_name == "Equipment Sales Cleanup":
-                    ws.append(
-                        [
-                            f"CHANGE {issue_idx}: Remove Consignment Equipment Rules from Equipment Sales"
-                        ]
-                    )
-                else:
-                    ws.append([f"CHANGE {issue_idx}: {issue_name}"])
-
-                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
-                c1 = ws.cell(row=1, column=1)
-                c1.font = title_font
-                c1.fill = title_fill
-                c1.alignment = Alignment(horizontal="center", vertical="center")
-                ws.row_dimensions[1].height = 30
-
-                ws.append(
-                    [
-                        f"Impact: Fixes ~{_fmt_pa(cy_type_pa)} Rs. PA in CY "
-                        f"({cy_type_rows} rows) | "
-                        f"{py_type_rows} rows in PY | Affects both CY and PY"
-                    ]
-                )
-                ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
-                c2 = ws.cell(row=2, column=1)
-                c2.font = subtitle_font
-                c2.alignment = Alignment(horizontal="left", vertical="center")
-                ws.append([])
-
-                if issue_name == "International BL Filter":
-                    bl_list = ", ".join(str(x) for x in sorted(type_df["business_line"].unique())[:8])
-                    ws.append(
-                        [
-                            f"PROBLEM: The International catch-all rules (BL=81-93) are also matching "
-                            f"rows with non-international BLs ({bl_list}, etc). "
-                            f"These rows should NOT be counted as International revenue."
-                        ]
-                    )
-                    ws.append(
-                        [
-                            f"FIX: Add tighter segment filters to the International catch-all rules, "
-                            f"or add these BLs to their correct revenue category rules."
-                        ]
-                    )
-                elif issue_name == "Equipment Sales Cleanup":
-                    ws.append(
-                        [
-                            f"PROBLEM: Equipment Sales catch-all rules are matching rows with "
-                            f"consignment accounts (471003, 471007) which are NOT real equipment sales."
-                        ]
-                    )
-                    ws.append(
-                        [
-                            f"FIX: Add an ACCOUNT filter to the Equipment Sales rules so they only "
-                            f"match 416xxx accounts. DELETE rules with ACCOUNT = 471003 and 471007."
-                        ]
-                    )
-                else:
-                    sample_reason = (
-                        type_df["_issue_reason"].iloc[0] if not type_df.empty else ""
-                    )
-                    ws.append([f"PROBLEM: {sample_reason}"])
-                    ws.append(
-                        ["FIX: Review these rows and add appropriate mapping rules."]
-                    )
-
-                ws.append([])
-
-                if issue_name == "International BL Filter":
-                    detail_cols = [
-                        "BL",
-                        "Description",
-                        "CY Rows",
-                        "CY PA (Rs.)",
-                        "CY EB (Rs.)",
-                        "PY Rows",
-                        "Sample Flexfield",
-                        "Current Rule",
-                        "Reason",
-                    ]
-                    reason_text = (
-                        "International catch-all rules have ALL segments blank, "
-                        "so they match every row. The BL filter (81-93) then rejects "
-                        "rows with non-international BLs, but the row is already matched "
-                        "to International and rejected as unmapped."
-                    )
-                elif issue_name == "Equipment Sales Cleanup":
-                    detail_cols = [
-                        "Account",
-                        "Description",
-                        "CY Rows",
-                        "CY PA (Rs.)",
-                        "CY EB (Rs.)",
-                        "PY Rows",
-                        "Sample Flexfield",
-                        "Current Rule",
-                        "Reason",
-                    ]
-                    reason_text = (
-                        "Equipment Sales catch-all rules have no ACCOUNT filter, so they "
-                        "match rows with consignment accounts (471003, 471007). These are "
-                        "consignment/intermediary accounts, not actual equipment sales revenue."
-                    )
-                else:
-                    detail_cols = [
-                        "Key",
-                        "Description",
-                        "CY Rows",
-                        "CY PA (Rs.)",
-                        "CY EB (Rs.)",
-                        "PY Rows",
-                        "Sample Flexfield",
-                        "Raw Reason",
-                        "Reason",
-                    ]
-                    reason_text = (
-                        "No mapping rule covers this combination of GL Account, Product, "
-                        "and Business Line segments in the Code Mapping workbook."
-                    )
-
-                ws.append(detail_cols)
-                header_row_num = ws.max_row
-                _style_header_row(ws, header_row_num, len(detail_cols))
-
-                for _, r in sub_groups.iterrows():
-                    if issue_name == "International BL Filter":
-                        row_reason = (
-                            f"BL {r['_issue_key']} is not in the standard international "
-                            f"BL range (81-93). The catch-all rule matched but the "
-                            f"segment filter rejected it."
-                        )
-                        ws.append(
-                            [
-                                r["_issue_key"],
-                                r["Sample_Desc"],
-                                int(r["CY_Rows"]),
-                                _fmt_pa(r["CY_PA"]),
-                                _fmt_pa(r["CY_EB"]),
-                                int(r["PY_Rows"]),
-                                r["Sample_Flex"],
-                                "Catch-all (BL=81-93, all segments blank)",
-                                row_reason,
-                            ]
-                        )
-                    elif issue_name == "Equipment Sales Cleanup":
-                        row_reason = (
-                            f"Account {r['_issue_key']} is a consignment/intermediary "
-                            f"account code. Real equipment sales use 416xxx accounts."
-                        )
-                        ws.append(
-                            [
-                                r["_issue_key"],
-                                r["Sample_Desc"],
-                                int(r["CY_Rows"]),
-                                _fmt_pa(r["CY_PA"]),
-                                _fmt_pa(r["CY_EB"]),
-                                int(r["PY_Rows"]),
-                                r["Sample_Flex"],
-                                f"Consignment account {r['_issue_key']}",
-                                row_reason,
-                            ]
-                        )
-                    else:
-                        ws.append(
-                            [
-                                r["_issue_key"],
-                                r["Sample_Desc"],
-                                int(r["CY_Rows"]),
-                                _fmt_pa(r["CY_PA"]),
-                                _fmt_pa(r["CY_EB"]),
-                                int(r["PY_Rows"]),
-                                r["Sample_Flex"],
-                                r["_issue_key"],
-                                reason_text,
-                            ]
-                        )
-
-                data_start_row = header_row_num + 1
-                data_end_row = ws.max_row
-                _style_data_rows(ws, data_start_row, data_end_row, len(detail_cols))
-
-                ws.append([])
-                ws.append(
-                    [
-                        "TOTAL",
-                        "",
-                        cy_type_rows,
-                        _fmt_pa(cy_type_pa),
-                        _fmt_pa(cy_type_eb),
-                        py_type_rows,
-                        "",
-                        "",
-                        "",
-                    ]
-                )
-                _style_total_row(ws, ws.max_row, len(detail_cols))
-
-                _auto_width(ws)
-                if issue_name == "International BL Filter":
-                    ws.column_dimensions["B"].width = 35
-                    ws.column_dimensions["H"].width = 35
-                    ws.column_dimensions["I"].width = 55
-                elif issue_name == "Equipment Sales Cleanup":
-                    ws.column_dimensions["B"].width = 35
-                    ws.column_dimensions["H"].width = 35
-                    ws.column_dimensions["I"].width = 55
-                else:
-                    ws.column_dimensions["I"].width = 55
 
         with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
             if not cy_unmapped.empty:
@@ -1283,6 +1304,16 @@ async def download_unmapped_report(
         request=request
     )
 
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/status")
+async def health_check():
+    return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
     return FileResponse(
         path=str(file_path),
         filename=filename,

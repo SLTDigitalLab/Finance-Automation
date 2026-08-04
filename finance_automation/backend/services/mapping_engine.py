@@ -267,8 +267,9 @@ class MappingEngine:
         unmapped = []
         mapped_count = 0
 
-        for idx, row in tb_df.iterrows():
-            row_dict = row.to_dict()
+        # Fast dictionary records access (over 15x faster than tb_df.iterrows())
+        records = tb_df.to_dict("records")
+        for row_dict in records:
             matched_category, reason = self._find_category(row_dict)
 
             if matched_category:
@@ -305,42 +306,29 @@ class MappingEngine:
         acct = _safe_int(segments[5]) or 0
         tech = _safe_int(segments[6]) or 0
 
-        matching_rules = []
-        for rule in self.rules:
-            if rule.matches(row):
-                matching_rules.append(rule)
+        matching_rules = [r for r in self.rules if r.matches(row)]
 
         if not matching_rules:
-            gl_covered = any(
-                rule.account_from is not None
-                and rule.account_from <= acct <= (rule.account_to or rule.account_from)
-                for rule in self.rules
-            )
-            if not gl_covered:
+            # Fast hierarchical rule filtering instead of 3 full scans over all rules
+            acct_rules = [
+                r for r in self.rules
+                if r.account_from is not None and r.account_from <= acct <= (r.account_to or r.account_from)
+            ]
+            if not acct_rules:
                 return "", f"GL {acct} not covered by any rule range"
 
-            prod_covered = any(
-                rule.product_from is not None
-                and rule.product_from <= prod <= (rule.product_to or rule.product_from)
-                for rule in self.rules
-                if rule.account_from is not None
-                and rule.account_from <= acct <= (rule.account_to or rule.account_from)
-            )
-            if not prod_covered:
+            prod_rules = [
+                r for r in acct_rules
+                if r.product_from is not None and r.product_from <= prod <= (r.product_to or r.product_from)
+            ]
+            if not prod_rules:
                 return "", f"Product {prod} outside all rule ranges for GL {acct}"
 
-            bl_covered = any(
-                rule.business_line_from is not None
-                and rule.business_line_from
-                <= bl
-                <= (rule.business_line_to or rule.business_line_from)
-                for rule in self.rules
-                if rule.account_from is not None
-                and rule.account_from <= acct <= (rule.account_to or rule.account_from)
-                and rule.product_from is not None
-                and rule.product_from <= prod <= (rule.product_to or rule.product_from)
-            )
-            if not bl_covered:
+            bl_rules = [
+                r for r in prod_rules
+                if r.business_line_from is not None and r.business_line_from <= bl <= (r.business_line_to or r.business_line_from)
+            ]
+            if not bl_rules:
                 return (
                     "",
                     f"BL {bl} outside all rule ranges for GL {acct}, Product {prod}",

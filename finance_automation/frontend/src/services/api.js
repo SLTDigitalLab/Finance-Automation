@@ -38,6 +38,52 @@ function getAuthHeaders(headers = {}) {
   return headers;
 }
 
+async function parseResponseError(response, defaultMessage = "Request failed") {
+  let errorMsg = `${defaultMessage} (${response.status})`;
+  try {
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      const errorData = await response.json();
+      errorMsg = errorData.detail?.errors?.join(", ") || errorData.detail || errorData.message || errorMsg;
+    } else {
+      const text = await response.text();
+      if (response.status === 502) {
+        errorMsg = "502 Bad Gateway: The backend server is down or unreachable.";
+      } else if (response.status === 504) {
+        errorMsg = "504 Gateway Timeout: Request timed out on backend server.";
+      } else if (response.status === 413) {
+        errorMsg = "File is too large. Server file size limit exceeded.";
+      } else if (text && text.length < 200 && !text.includes("<html")) {
+        errorMsg = text;
+      }
+    }
+  } catch (e) {
+    if (response.status === 502) {
+      errorMsg = "502 Bad Gateway: Backend server unreachable.";
+    }
+  }
+  return new Error(errorMsg);
+}
+
+async function safeJsonResponse(response, defaultMsg = "Invalid response from server") {
+  if (!response.ok) {
+    throw await parseResponseError(response, defaultMsg);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    if (text.trim().startsWith("<") || text.includes("<html")) {
+      throw new Error(`Server returned HTML instead of JSON (${response.status}). Check backend service URL & proxy routing.`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error(text || `${defaultMsg} (${response.status})`);
+    }
+  }
+  return response.json();
+}
+
 // Upload & Report Generation
 export async function uploadFiles(files) {
   const formData = new FormData();
