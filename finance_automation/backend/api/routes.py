@@ -752,10 +752,7 @@ def _write_summary_and_detail_sheets(
     def _auto_width(ws, min_width=10, max_width=65):
         for col_cells in ws.columns:
             col_letter = get_column_letter(col_cells[0].column)
-            lengths = []
-            for cell in col_cells:
-                if cell.value is not None:
-                    lengths.append(len(str(cell.value)))
+            lengths = [len(str(cell.value)) for cell in col_cells[:100] if cell.value is not None]
             if lengths:
                 w = min(max(max(lengths) + 2, min_width), max_width)
                 ws.column_dimensions[col_letter].width = w
@@ -769,7 +766,9 @@ def _write_summary_and_detail_sheets(
             cell.border = thin_border
 
     def _style_data_rows(ws, start_row, end_row, num_cols):
-        for r in range(start_row, end_row + 1):
+        # Limit row styling loop to first 500 rows to prevent gateway timeouts on massive datasets
+        max_styled_row = min(end_row, start_row + 500)
+        for r in range(start_row, max_styled_row + 1):
             is_alt = (r - start_row) % 2 == 1
             for c in range(1, num_cols + 1):
                 cell = ws.cell(row=r, column=c)
@@ -1314,13 +1313,4 @@ async def download_unmapped_report(
 @router.get("/status")
 async def health_check():
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
 
-
-@router.get("/status")
-async def health_check():
-    return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
