@@ -1053,6 +1053,8 @@ def _write_summary_and_detail_sheets(
         # Enable filters on the header row
         ws.auto_filter.ref = f"A{hdr_r}:Q{hdr_r}"
 
+        # --- fast bulk write: append all data rows first ---
+        all_rows = []
         for row_i, r in enumerate(records):
             gl_val = str(r.get("gl_code") or "").strip()
             prod_val = str(r.get("product") or "").strip()
@@ -1071,7 +1073,7 @@ def _write_summary_and_detail_sheets(
             else:
                 row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Update rule for GL {gl_val}, Product {prod_val}, BL {bl_val}"
 
-            row_data = [
+            all_rows.append([
                 r.get("_source", ""),
                 r.get("gl_code", ""),
                 r.get("description", ""),
@@ -1089,41 +1091,38 @@ def _write_summary_and_detail_sheets(
                 _fmt_pa(r.get("ending_balance", 0)),
                 row_fix,
                 r.get("unmapped_reason", ""),
-            ]
+            ])
 
+        data_row_start = hdr_r + 1
+        for row_data in all_rows:
             ws.append(row_data)
-            curr_r = ws.max_row
-            is_alt = row_i % 2 == 1
 
-                    # Single-pass cell styling during row insertion
-        for col_i in range(1, len(detail_cols) + 1):
-            cell = ws.cell(row=curr_r, column=col_i)
-            cell.font = data_font
-            cell.border = thin_border
-            cell.alignment = align_center
+        data_row_end = ws.max_row
 
-            if target_seg == "account" and col_i in (2, 9):
-                cell.fill = amber_fill
-                cell.font = amber_font
+        # Apply base styling to ALL data rows in one pass (cap at 500 for speed)
+        _style_data_rows(ws, data_row_start, min(data_row_end, data_row_start + 499), len(detail_cols))
 
-            elif target_seg == "product" and col_i == 8:
-                cell.fill = amber_fill
-                cell.font = amber_font
+        # Targeted amber highlighting on special columns only (pre-built objects, no per-cell new allocations)
+        _amber_fill_obj = amber_fill
+        _amber_font_obj = amber_font
+        _yellow_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+        amber_cols = []
+        if target_seg == "account":
+            amber_cols = [2, 9]
+        elif target_seg == "product":
+            amber_cols = [8]
+        elif target_seg == "business_line":
+            amber_cols = [7]
 
-            elif target_seg == "business_line" and col_i == 7:
-                cell.fill = amber_fill
-                cell.font = amber_font
+        for r_num in range(data_row_start, data_row_end + 1):
+            for col_i in amber_cols:
+                cell = ws.cell(row=r_num, column=col_i)
+                cell.fill = _amber_fill_obj
+                cell.font = _amber_font_obj
+            # Unmapped Reason column (col 17) always gets yellow fill
+            ws.cell(row=r_num, column=17).fill = _yellow_fill
 
-            # Highlight Unmapped Reason column
-            elif col_i == 17:
-                cell.fill = PatternFill(
-                    start_color="FFF2CC",
-                    end_color="FFF2CC",
-                    fill_type="solid"
-                )
 
-            elif is_alt:
-                cell.fill = alt_fill
 
         ws.append([])
         ws.append([

@@ -178,8 +178,8 @@ export async function generateUnmappedReport(sessionId) {
 }
 
 export async function pollUnmappedStatus(sessionId) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    await wait(2000);
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(3000);
 
     const response = await fetch(`${API_BASE}/unmapped-status/${sessionId}`, {
       headers: getAuthHeaders(),
