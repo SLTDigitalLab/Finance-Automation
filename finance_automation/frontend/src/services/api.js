@@ -38,6 +38,13 @@ function getAuthHeaders(headers = {}) {
   return headers;
 }
 
+export async function getRevenueForecast() {
+  const response = await fetch(`${API_BASE}/forecast/revenue`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load revenue forecast");
+}
+
 async function parseResponseError(response, defaultMessage = "Request failed") {
   let errorMsg = `${defaultMessage} (${response.status})`;
   try {
