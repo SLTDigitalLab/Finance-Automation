@@ -1,16 +1,24 @@
 from importlib.resources import files
+import datetime
+import hashlib
 import os
 import json
 import time
 import uuid
 import shutil
 from pathlib import Path
+import pandas as pd
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends, Request, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.database.connection import get_db, SessionLocal
 from app.auth.jwt_handler import get_admin_user, get_current_active_user
-from app.models.user_and_log import User, ReportJob
+from app.models.user_and_log import (
+    FinancialTBRecord,
+    ReportJob,
+    UploadedFinanceFile,
+    User,
+)
 from app.services.audit_logger import log_audit
 from utils.logger import logger
 from config import settings
@@ -36,6 +44,147 @@ router = APIRouter(prefix="/api", tags=["finance"])
 
 uploaded_files_store: dict = {}
 report_jobs: dict = {}
+unmapped_jobs: dict = {}
+
+
+def _sha256_file(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _persist_tb_data(
+    db: Session,
+    session_id: str,
+    user_id: int,
+    current_report_month: str,
+    current_report_year: int,
+    previous_report_month: str,
+    previous_report_year: int,
+    file_paths: dict,
+    current_tb_df,
+    previous_tb_df,
+):
+    """Persist mapped TB rows without changing the DataFrames used for reporting."""
+    file_data = (
+        ("tb_current", current_tb_df),
+        ("tb_previous", previous_tb_df),
+    )
+    new_current_tb_processed = False
+    try:
+        for file_type, tb_df in file_data:
+            period_month, period_year = (
+                (current_report_month, current_report_year)
+                if file_type == "tb_current"
+                else (previous_report_month, previous_report_year)
+            )
+            file_path = Path(file_paths[file_type])
+            file_hash = _sha256_file(file_path)
+            duplicate_file = (
+                db.query(UploadedFinanceFile)
+                .filter(UploadedFinanceFile.file_hash == file_hash)
+                .first()
+            )
+            if duplicate_file is not None:
+                logger.info(
+                    "Exact duplicate TB file already exists: "
+                    f"hash={file_hash}, file_type={duplicate_file.file_type}, "
+                    f"uploaded_file_id={duplicate_file.id}"
+                )
+                continue
+
+            uploaded_file = (
+                db.query(UploadedFinanceFile)
+                .filter(
+                    UploadedFinanceFile.session_id == session_id,
+                    UploadedFinanceFile.file_type == file_type,
+                )
+                .first()
+            )
+
+            if uploaded_file is None:
+                original_filename = file_path.name.split("__", 1)[-1]
+                uploaded_file = UploadedFinanceFile(
+                    session_id=session_id,
+                    user_id=user_id,
+                    file_type=file_type,
+                    original_filename=original_filename,
+                    file_hash=file_hash,
+                    period_month=period_month,
+                    period_year=period_year,
+                    file_size=file_path.stat().st_size if file_path.exists() else None,
+                )
+                db.add(uploaded_file)
+                db.flush()
+
+            existing_row_indexes = {
+                row_index
+                for (row_index,) in db.query(FinancialTBRecord.row_index)
+                .filter(FinancialTBRecord.uploaded_file_id == uploaded_file.id)
+                .all()
+            }
+
+            fields = (
+                "gl_code",
+                "description",
+                "flexfield",
+                "cost_center",
+                "location",
+                "business_line",
+                "product",
+                "account",
+                "technology",
+                "intercompany",
+                "project",
+                "beginning_balance",
+                "period_activity",
+                "ending_balance",
+                "revenue_category",
+                "sub_category",
+            )
+            for row_index, row in enumerate(tb_df.to_dict("records"), start=1):
+                if row_index in existing_row_indexes:
+                    continue
+                values = {
+                    field: row.get(field) if field in row else None for field in fields
+                }
+                values = {
+                    field: None if pd.isna(value) else value
+                    for field, value in values.items()
+                }
+                db.add(
+                    FinancialTBRecord(
+                        uploaded_file_id=uploaded_file.id,
+                        user_id=user_id,
+                        period_month=period_month,
+                        period_year=period_year,
+                        row_index=row_index,
+                        **values,
+                    )
+                )
+
+            db.flush()
+            uploaded_file.status = "processed"
+            uploaded_file.processed_at = datetime.datetime.utcnow()
+            if file_type == "tb_current":
+                new_current_tb_processed = True
+
+        db.commit()
+
+        # Trigger background forecasting model retraining ONLY if a new valid current-year tb_current file was processed
+        if new_current_tb_processed:
+            try:
+                from app.services.revenue_forecasting_trainer import trigger_background_retraining
+                trigger_background_retraining()
+                logger.info(f"Triggered automatic model retraining for new current-year TB file (session={session_id})")
+            except Exception as e:
+                logger.warning(f"Could not trigger background model retraining: {e}")
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to persist TB data for session {session_id}")
+        raise
 
 
 def _db_save_job(session_id: str, status: str, result: dict | None = None):
@@ -170,6 +319,9 @@ def _build_report_for_session(
             detail="Could not detect month and year from Trial Balance filename. "
             "Please ensure the filename contains a month abbreviation and year.",
         )
+    previous_report_month, previous_report_year = detect_tb_month_and_year(
+        file_paths["tb_previous"]
+    )
     logger.info(f"Report period: {report_month} {report_year}")
 
     logger.info("Loading mapping rules...")
@@ -202,6 +354,19 @@ def _build_report_for_session(
     logger.info("Mapping previous year TB rows...")
     py_tb_df = mapping_engine.map_tb_rows(py_tb_df)
     py_unmapped_df = mapping_engine.get_unmapped_report()
+
+    _persist_tb_data(
+        db=db,
+        session_id=session_id,
+        user_id=user_id,
+        current_report_month=report_month,
+        current_report_year=report_year,
+        previous_report_month=previous_report_month,
+        previous_report_year=previous_report_year,
+        file_paths=file_paths,
+        current_tb_df=cy_tb_df,
+        previous_tb_df=py_tb_df,
+    )
 
     file_paths["cy_unmapped_df"] = cy_unmapped_df
     file_paths["py_unmapped_df"] = py_unmapped_df
@@ -752,10 +917,7 @@ def _write_summary_and_detail_sheets(
     def _auto_width(ws, min_width=10, max_width=65):
         for col_cells in ws.columns:
             col_letter = get_column_letter(col_cells[0].column)
-            lengths = []
-            for cell in col_cells:
-                if cell.value is not None:
-                    lengths.append(len(str(cell.value)))
+            lengths = [len(str(cell.value)) for cell in col_cells[:100] if cell.value is not None]
             if lengths:
                 w = min(max(max(lengths) + 2, min_width), max_width)
                 ws.column_dimensions[col_letter].width = w
@@ -769,7 +931,9 @@ def _write_summary_and_detail_sheets(
             cell.border = thin_border
 
     def _style_data_rows(ws, start_row, end_row, num_cols):
-        for r in range(start_row, end_row + 1):
+        # Limit row styling loop to first 500 rows to prevent gateway timeouts on massive datasets
+        max_styled_row = min(end_row, start_row + 500)
+        for r in range(start_row, max_styled_row + 1):
             is_alt = (r - start_row) % 2 == 1
             for c in range(1, num_cols + 1):
                 cell = ws.cell(row=r, column=c)
@@ -1053,6 +1217,8 @@ def _write_summary_and_detail_sheets(
         # Enable filters on the header row
         ws.auto_filter.ref = f"A{hdr_r}:Q{hdr_r}"
 
+        # --- fast bulk write: append all data rows first ---
+        all_rows = []
         for row_i, r in enumerate(records):
             gl_val = str(r.get("gl_code") or "").strip()
             prod_val = str(r.get("product") or "").strip()
@@ -1071,7 +1237,7 @@ def _write_summary_and_detail_sheets(
             else:
                 row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Update rule for GL {gl_val}, Product {prod_val}, BL {bl_val}"
 
-            row_data = [
+            all_rows.append([
                 r.get("_source", ""),
                 r.get("gl_code", ""),
                 r.get("description", ""),
@@ -1089,41 +1255,38 @@ def _write_summary_and_detail_sheets(
                 _fmt_pa(r.get("ending_balance", 0)),
                 row_fix,
                 r.get("unmapped_reason", ""),
-            ]
+            ])
 
+        data_row_start = hdr_r + 1
+        for row_data in all_rows:
             ws.append(row_data)
-            curr_r = ws.max_row
-            is_alt = row_i % 2 == 1
 
-                    # Single-pass cell styling during row insertion
-        for col_i in range(1, len(detail_cols) + 1):
-            cell = ws.cell(row=curr_r, column=col_i)
-            cell.font = data_font
-            cell.border = thin_border
-            cell.alignment = align_center
+        data_row_end = ws.max_row
 
-            if target_seg == "account" and col_i in (2, 9):
-                cell.fill = amber_fill
-                cell.font = amber_font
+        # Apply base styling to ALL data rows in one pass (cap at 500 for speed)
+        _style_data_rows(ws, data_row_start, min(data_row_end, data_row_start + 499), len(detail_cols))
 
-            elif target_seg == "product" and col_i == 8:
-                cell.fill = amber_fill
-                cell.font = amber_font
+        # Targeted amber highlighting on special columns only (pre-built objects, no per-cell new allocations)
+        _amber_fill_obj = amber_fill
+        _amber_font_obj = amber_font
+        _yellow_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+        amber_cols = []
+        if target_seg == "account":
+            amber_cols = [2, 9]
+        elif target_seg == "product":
+            amber_cols = [8]
+        elif target_seg == "business_line":
+            amber_cols = [7]
 
-            elif target_seg == "business_line" and col_i == 7:
-                cell.fill = amber_fill
-                cell.font = amber_font
+        for r_num in range(data_row_start, data_row_end + 1):
+            for col_i in amber_cols:
+                cell = ws.cell(row=r_num, column=col_i)
+                cell.fill = _amber_fill_obj
+                cell.font = _amber_font_obj
+            # Unmapped Reason column (col 17) always gets yellow fill
+            ws.cell(row=r_num, column=17).fill = _yellow_fill
 
-            # Highlight Unmapped Reason column
-            elif col_i == 17:
-                cell.fill = PatternFill(
-                    start_color="FFF2CC",
-                    end_color="FFF2CC",
-                    fill_type="solid"
-                )
 
-            elif is_alt:
-                cell.fill = alt_fill
 
         ws.append([])
         ws.append([
@@ -1172,11 +1335,82 @@ def _write_summary_and_detail_sheets(
         ws.column_dimensions["Q"].width = 50
 
 
+def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
+    """Background worker: builds the unmapped Excel and stores result in unmapped_jobs."""
+    import pandas as pd
+    db = SessionLocal()
+    try:
+        file_paths = _get_session_files(session_id)
+        if not file_paths:
+            raise ValueError(
+                "Upload session expired or files are not available. "
+                "Please upload the files and generate the report again."
+            )
+
+        cy_unmapped, py_unmapped, report_month, report_year = _get_or_compute_unmapped_dfs(session_id, file_paths)
+
+        if cy_unmapped is None or py_unmapped is None:
+            raise ValueError("Unmapped data not available. Please generate the report first.")
+
+        output_filename = f"Unmapped_Rows_{report_month}_{report_year}.xlsx"
+        output_path = settings.OUTPUT_DIR / output_filename
+
+        display_cols = [
+            "gl_code", "description", "flexfield", "cost_center", "location",
+            "business_line", "product", "account", "technology", "intercompany",
+            "project", "beginning_balance", "period_activity", "ending_balance",
+        ]
+
+        with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
+            if not cy_unmapped.empty:
+                cy_export = cy_unmapped[[c for c in display_cols if c in cy_unmapped.columns]].copy()
+                cy_export.to_excel(writer, sheet_name="CY Unmapped", index=False)
+            else:
+                pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="CY Unmapped", index=False)
+
+            if not py_unmapped.empty:
+                py_export = py_unmapped[[c for c in display_cols if c in py_unmapped.columns]].copy()
+                py_export.to_excel(writer, sheet_name="PY Unmapped", index=False)
+            else:
+                pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="PY Unmapped", index=False)
+
+            _write_summary_and_detail_sheets(writer, cy_unmapped, py_unmapped, report_month, report_year)
+
+        cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
+        py_count = len(py_unmapped) if not py_unmapped.empty else 0
+        logger.info(f"Unmapped report generated: {output_filename} (CY: {cy_count}, PY: {py_count})")
+
+        log_audit(
+            db=db,
+            action="Unmapped Report Generation",
+            module="Finance",
+            description=f"Generated unmapped rows Excel report. Filename: {output_filename}, Month: {report_month}, Year: {report_year}, CY: {cy_count}, PY: {py_count}",
+            user_id=user_id,
+            user_name=user_name,
+        )
+
+        job_data = {
+            "status": "success",
+            "filename": output_filename,
+            "cy_unmapped_count": cy_count,
+            "py_unmapped_count": py_count,
+        }
+        unmapped_jobs[session_id] = job_data
+        _db_save_job(f"unmapped_{session_id}", "success", job_data)
+
+    except Exception as e:
+        logger.exception(f"Unmapped job failed for session {session_id}: {e}")
+        error_data = {"status": "error", "message": str(e)}
+        unmapped_jobs[session_id] = error_data
+        _db_save_job(f"unmapped_{session_id}", "error", error_data)
+    finally:
+        db.close()
+
+
 @router.post("/generate-unmapped")
 async def generate_unmapped_report(
-    request: Request,
+    background_tasks: BackgroundTasks,
     session_id: str = Query(""),
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     if not session_id:
@@ -1185,8 +1419,13 @@ async def generate_unmapped_report(
             detail="Invalid or missing session_id. Generate report first.",
         )
 
-    file_paths = _get_session_files(session_id)
-    if not file_paths:
+    # Return cached result if already done
+    existing = unmapped_jobs.get(session_id)
+    if existing and existing.get("status") in ("success", "error"):
+        return existing
+
+    # Validate session files exist before enqueuing
+    if not _get_session_files(session_id):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1195,92 +1434,38 @@ async def generate_unmapped_report(
             ),
         )
 
-    cy_unmapped, py_unmapped, report_month, report_year = _get_or_compute_unmapped_dfs(session_id, file_paths)
+    # Already in progress?
+    if existing and existing.get("status") == "processing":
+        return existing
 
-    if cy_unmapped is None or py_unmapped is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Unmapped data not available. Please generate the report first.",
-        )
+    _db_save_job(f"unmapped_{session_id}", "processing")
+    unmapped_jobs[session_id] = {"status": "processing", "message": "Unmapped report generation started."}
+    background_tasks.add_task(_run_unmapped_job, session_id, current_user.id, current_user.full_name)
 
-    try:
-        import pandas as pd
+    return unmapped_jobs[session_id]
 
-        output_filename = f"Unmapped_Rows_{report_month}_{report_year}.xlsx"
-        output_path = settings.OUTPUT_DIR / output_filename
 
-        display_cols = [
-            "gl_code",
-            "description",
-            "flexfield",
-            "cost_center",
-            "location",
-            "business_line",
-            "product",
-            "account",
-            "technology",
-            "intercompany",
-            "project",
-            "beginning_balance",
-            "period_activity",
-            "ending_balance",
-        ]
+@router.get("/unmapped-status/{session_id}")
+async def get_unmapped_status(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    # Check in-memory first
+    job = unmapped_jobs.get(session_id)
+    if job and job.get("status") in ("success", "error"):
+        return job
 
-        with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
-            if not cy_unmapped.empty:
-                cy_export = cy_unmapped[
-                    [c for c in display_cols if c in cy_unmapped.columns]
-                ].copy()
-                cy_export.to_excel(writer, sheet_name="CY Unmapped", index=False)
-            else:
-                pd.DataFrame(columns=display_cols).to_excel(
-                    writer, sheet_name="CY Unmapped", index=False
-                )
+    # Fall back to DB (cross-worker)
+    db_result = _db_load_job(f"unmapped_{session_id}")
+    if db_result:
+        if db_result.get("status") in ("success", "error"):
+            unmapped_jobs[session_id] = db_result
+        return db_result
 
-            if not py_unmapped.empty:
-                py_export = py_unmapped[
-                    [c for c in display_cols if c in py_unmapped.columns]
-                ].copy()
-                py_export.to_excel(writer, sheet_name="PY Unmapped", index=False)
-            else:
-                pd.DataFrame(columns=display_cols).to_excel(
-                    writer, sheet_name="PY Unmapped", index=False
-                )
+    if job:
+        return job
 
-            _write_summary_and_detail_sheets(
-                writer, cy_unmapped, py_unmapped, report_month, report_year
-            )
-
-        cy_count = len(cy_unmapped) if not cy_unmapped.empty else 0
-        py_count = len(py_unmapped) if not py_unmapped.empty else 0
-        logger.info(
-            f"Unmapped report generated: {output_filename} (CY: {cy_count}, PY: {py_count})"
-        )
-
-        log_audit(
-            db=db,
-            action="Unmapped Report Generation",
-            module="Finance",
-            description=f"Generated unmapped rows Excel report. Filename: {output_filename}, Month: {report_month}, Year: {report_year}, CY: {cy_count}, PY: {py_count}",
-            user_id=current_user.id,
-            user_name=current_user.full_name,
-            request=request
-        )
-
-        return {
-            "status": "success",
-            "filename": output_filename,
-            "cy_unmapped_count": cy_count,
-            "py_unmapped_count": py_count,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error generating unmapped report: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Unmapped report generation failed: {str(e)}"
-        )
+    return {"status": "processing", "message": "Waiting for unmapped report generation to start."}
 
 
 @router.get("/download-unmapped/{filename}")
@@ -1314,13 +1499,4 @@ async def download_unmapped_report(
 @router.get("/status")
 async def health_check():
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
 
-
-@router.get("/status")
-async def health_check():
-    return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}

@@ -10,6 +10,7 @@ import AdminLayout from "./layouts/AdminLayout";
 import UserDashboard from "./pages/UserDashboard";
 import UserProfile from "./pages/UserProfile";
 import AuthCallback from "./pages/AuthCallback";
+import RevenueForecasting from "./pages/RevenueForecasting";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -68,6 +69,15 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <UserProfile />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/forecasting"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <RevenueForecasting />
               </ProtectedRoute>
             }
           />

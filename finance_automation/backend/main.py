@@ -10,6 +10,7 @@ from api.routes import router
 from app.routes.auth_routes import auth_router
 from app.routes.user_routes import user_router
 from app.routes.audit_routes import audit_router
+from app.routes.forecasting import forecast_router
 from utils.logger import logger
 
 app = FastAPI(
@@ -30,6 +31,7 @@ app.include_router(router)
 app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(audit_router)
+app.include_router(forecast_router)
 
 
 @app.on_event("startup")
@@ -41,7 +43,12 @@ async def startup_event():
     # Initialize DB & Seed Admin
     try:
         from app.database.connection import engine, SessionLocal
-        from app.models.user_and_log import Base, User
+        from app.models.user_and_log import (
+            Base,
+            FinancialTBRecord,
+            UploadedFinanceFile,
+            User,
+        )
         from app.auth.jwt_handler import get_password_hash
 
         logger.info("Initializing database tables...")
