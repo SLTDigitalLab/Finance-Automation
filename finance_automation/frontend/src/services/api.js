@@ -45,6 +45,45 @@ export async function getRevenueForecast() {
   return safeJsonResponse(response, "Unable to load revenue forecast");
 }
 
+// ── Anomaly & Fraud Detection API ─────────────────────────────────────────────
+
+export async function getAnomalySummary() {
+  const response = await fetch(`${API_BASE}/anomaly/summary`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly summary");
+}
+
+export async function getAnomalyResults(params = {}) {
+  const queryParts = [];
+  if (params.risk_level) queryParts.push(`risk_level=${encodeURIComponent(params.risk_level)}`);
+  if (params.period_month) queryParts.push(`period_month=${encodeURIComponent(params.period_month)}`);
+  if (params.revenue_category) queryParts.push(`revenue_category=${encodeURIComponent(params.revenue_category)}`);
+  if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
+  if (params.skip !== undefined) queryParts.push(`skip=${params.skip}`);
+  if (params.limit !== undefined) queryParts.push(`limit=${params.limit}`);
+  const qs = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/results${qs}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly results");
+}
+
+export async function getAnomalyFilterOptions() {
+  const response = await fetch(`${API_BASE}/anomaly/filters`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly filter options");
+}
+
+export async function triggerAnomalyAnalysis() {
+  const response = await fetch(`${API_BASE}/anomaly/analyze/sync`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to trigger anomaly analysis");
+}
+
 async function parseResponseError(response, defaultMessage = "Request failed") {
   let errorMsg = `${defaultMessage} (${response.status})`;
   try {

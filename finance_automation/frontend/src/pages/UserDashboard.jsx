@@ -31,6 +31,7 @@ import {
   Person as PersonIcon,
   VerifiedUser as VerifiedUserIcon,
   QueryStats as ForecastIcon,
+  BugReport as AnomalyIcon,
 } from "@mui/icons-material";
 import {
   uploadFiles,
@@ -66,6 +67,7 @@ const FILE_CONFIGS = [
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard", active: true },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
+  { label: "Anomaly Detection", icon: AnomalyIcon, path: "/anomaly" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

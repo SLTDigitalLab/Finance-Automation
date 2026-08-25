@@ -181,6 +181,14 @@ def _persist_tb_data(
                 logger.info(f"Triggered automatic model retraining for new current-year TB file (session={session_id})")
             except Exception as e:
                 logger.warning(f"Could not trigger background model retraining: {e}")
+
+            # Trigger background anomaly detection after new TB data is stored
+            try:
+                from app.services.anomaly_detection_service import trigger_background_anomaly_analysis
+                trigger_background_anomaly_analysis()
+                logger.info(f"Triggered background anomaly detection for new TB file (session={session_id})")
+            except Exception as e:
+                logger.warning(f"Could not trigger background anomaly detection: {e}")
     except Exception:
         db.rollback()
         logger.exception(f"Failed to persist TB data for session {session_id}")

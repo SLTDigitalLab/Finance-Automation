@@ -48,6 +48,7 @@ import {
   InfoOutlined as InfoIcon,
   FilterList as FilterIcon,
   CalendarMonth as CalendarIcon,
+  BugReport as AnomalyIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -66,6 +67,7 @@ const theme = createTheme({
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting", active: true },
+  { label: "Anomaly Detection", icon: AnomalyIcon, path: "/anomaly" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

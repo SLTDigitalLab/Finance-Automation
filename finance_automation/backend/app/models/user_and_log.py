@@ -130,3 +130,44 @@ class FinancialTBRecord(Base):
     sub_category = Column(String, nullable=True)
     row_index = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class AnomalyDetectionResult(Base):
+    """Stores computed anomaly/fraud detection scores for Trial Balance records."""
+    __tablename__ = "anomaly_detection_results"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+
+    # Reference back to the source TB record and file
+    tb_record_id = Column(Integer, nullable=True, index=True)
+    uploaded_file_id = Column(Integer, nullable=True, index=True)
+
+    # Denormalized key fields for fast filtering (avoids joins on every API call)
+    period_month = Column(String, nullable=True, index=True)
+    period_year = Column(Integer, nullable=True, index=True)
+    gl_code = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    flexfield = Column(String, nullable=True)
+    account = Column(String, nullable=True)
+    cost_center = Column(String, nullable=True)
+    business_line = Column(String, nullable=True)
+    revenue_category = Column(String, nullable=True, index=True)
+    sub_category = Column(String, nullable=True)
+
+    # Financial values (for display in UI — avoids re-joining TB table)
+    period_activity = Column(Float, nullable=True)
+    beginning_balance = Column(Float, nullable=True)
+    ending_balance = Column(Float, nullable=True)
+
+    # Anomaly scores
+    anomaly_score = Column(Float, nullable=True)           # composite 0.0–1.0 (higher = more suspicious)
+    isolation_score = Column(Float, nullable=True)         # normalized Isolation Forest score 0.0–1.0
+    z_score = Column(Float, nullable=True)                 # absolute z-score vs group mean
+    risk_level = Column(String, nullable=True, index=True) # "HIGH" | "MEDIUM" | "LOW"
+    risk_reason = Column(Text, nullable=True)              # human-readable explanation
+
+    # Metadata
+    detection_method = Column(String, default="hybrid_isolation_zscore")
+    model_version = Column(String, nullable=True)
+    analysis_run_id = Column(String, nullable=True, index=True)  # groups results per run
+    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)

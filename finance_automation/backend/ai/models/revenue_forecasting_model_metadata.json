@@ -9,7 +9,7 @@
   "mae": 14.6563,
   "rmse": 27.1843,
   "r2": 0.9975,
-  "last_trained": "2026-08-24T07:31:17.852300Z",
+  "last_trained": "2026-08-25T08:25:06.033907Z",
   "features_used": [
     "revenue_category",
     "month_number",
@@ -17,20 +17,20 @@
     "current_revenue_lag_1"
   ],
   "source_file_ids": [
-    13,
-    14,
-    15,
-    16,
-    17,
-    18
+    1,
+    3,
+    5,
+    7,
+    9,
+    11
   ],
   "source_files": [
+    "June 2026 TB PTD - Shared Revenue only.txt",
     "Jan -26 Revenue.txt",
     "Feb-26 Revenue.txt",
     "Mar-26 Revenue.txt",
     "Apr-26 Revenue.txt",
-    "May-26 Revenue.txt",
-    "Jun-26 Revenue.txt"
+    "May-26 Revenue.txt"
   ],
-  "duration_seconds": 1.36
+  "duration_seconds": 0.71
 }
