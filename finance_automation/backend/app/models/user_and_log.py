@@ -130,3 +130,45 @@ class FinancialTBRecord(Base):
     sub_category = Column(String, nullable=True)
     row_index = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class AnomalyDetectionResult(Base):
+    """
+    Stores AI-detected anomalies in FinancialTBRecord rows.
+
+    IMPORTANT: These records represent statistical outliers and suspicious
+    patterns identified by AI models for human review by the Finance Department.
+    They do NOT constitute confirmed fraud classifications.
+    """
+    __tablename__ = "anomaly_detection_results"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    tb_record_id = Column(
+        Integer, ForeignKey("financial_tb_records.id"), nullable=True, index=True
+    )
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=True, index=True
+    )
+    period_month = Column(String, nullable=True, index=True)
+    period_year = Column(Integer, nullable=True, index=True)
+    gl_code = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    flexfield = Column(String, nullable=True)
+    account = Column(String, nullable=True)
+    cost_center = Column(String, nullable=True)
+    business_line = Column(String, nullable=True)
+    revenue_category = Column(String, nullable=True, index=True)
+    sub_category = Column(String, nullable=True)
+    period_activity = Column(Float, default=0.0)
+    beginning_balance = Column(Float, default=0.0)
+    ending_balance = Column(Float, default=0.0)
+    anomaly_score = Column(Float, default=0.0)
+    isolation_score = Column(Float, default=0.0)
+    z_score = Column(Float, default=0.0)
+    risk_level = Column(String, nullable=True, index=True)  # "HIGH", "MEDIUM", "LOW"
+    risk_reason = Column(Text, nullable=True)
+    detection_method = Column(String, default="hybrid_isolation_zscore")
+    model_version = Column(String, default="1.0.0")
+    analysis_run_id = Column(String, nullable=True, index=True)
+    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+

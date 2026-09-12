@@ -18,6 +18,8 @@ import {
   ExitToApp as LogoutIcon,
   Person as PersonIcon,
   VerifiedUser as VerifiedUserIcon,
+  QueryStats as ForecastIcon,
+  Security as SecurityIcon,
 } from "@mui/icons-material";
 
 const theme = createTheme({
@@ -32,6 +34,8 @@ const theme = createTheme({
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
+  { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Profile", icon: PersonIcon, path: "/profile", active: true },
 ];
 

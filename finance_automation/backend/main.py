@@ -11,6 +11,7 @@ from app.routes.auth_routes import auth_router
 from app.routes.user_routes import user_router
 from app.routes.audit_routes import audit_router
 from app.routes.forecasting import forecast_router
+from app.routes.anomaly_routes import anomaly_router
 from utils.logger import logger
 
 app = FastAPI(
@@ -32,6 +33,7 @@ app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(audit_router)
 app.include_router(forecast_router)
+app.include_router(anomaly_router)
 
 
 @app.on_event("startup")

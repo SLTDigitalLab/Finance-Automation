@@ -494,6 +494,16 @@ def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
                 while len(segments) < 9:
                     segments.append("0")
 
+                # Filter revenue codes (400000 to 429999 inclusive)
+                code_val = gl_code if gl_code else segments[5]
+                try:
+                    code_num = int(float(str(code_val).strip()))
+                except (ValueError, TypeError):
+                    continue
+
+                if not (400000 <= code_num <= 429999):
+                    continue
+
                 records.append(
                     {
                         "gl_code": gl_code,
@@ -517,21 +527,23 @@ def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
                 continue
 
     df = pd.DataFrame(records)
-    print(df.iloc[0][["beginning_balance",
-                  "period_activity",
-                  "ending_balance"]])
+    if not df.empty:
+        print(df.iloc[0][["beginning_balance",
+                      "period_activity",
+                      "ending_balance"]])
 
     logger.info(f"TXT Trial Balance loaded: {len(df)} rows")
 
     print("\n================ TXT DEBUG ================")
     print(f"Total rows : {len(df)}")
 
-    print("\nFirst 10 rows")
-    print(df.head(10))
+    if not df.empty:
+        print("\nFirst 10 rows")
+        print(df.head(10))
 
-    print("\nPeriod Activity Total :", df["period_activity"].sum())
-    print("Beginning Balance Total :", df["beginning_balance"].sum())
-    print("Ending Balance Total :", df["ending_balance"].sum())
+        print("\nPeriod Activity Total :", df["period_activity"].sum())
+        print("Beginning Balance Total :", df["beginning_balance"].sum())
+        print("Ending Balance Total :", df["ending_balance"].sum())
 
     return df
 

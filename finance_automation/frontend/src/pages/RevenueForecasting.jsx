@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { getRevenueForecast } from "../services/api";
@@ -48,6 +48,8 @@ import {
   InfoOutlined as InfoIcon,
   FilterList as FilterIcon,
   CalendarMonth as CalendarIcon,
+  RestartAlt as ResetIcon,
+  Security as SecurityIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -66,8 +68,39 @@ const theme = createTheme({
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting", active: true },
+  { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
+
+const ALL_MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const MONTH_INDEX_MAP = {
+  January: 1,
+  February: 2,
+  March: 3,
+  April: 4,
+  May: 5,
+  June: 6,
+  July: 7,
+  August: 8,
+  September: 9,
+  October: 10,
+  November: 11,
+  December: 12,
+};
 
 function formatCurrency(value) {
   if (value == null || !Number.isFinite(Number(value))) return "N/A";
@@ -84,9 +117,189 @@ function safePercent(value) {
 }
 
 // ----------------------------------------------------------------------
-// Interactive Line Chart (Actuals vs Forecast)
+// Dynamic Future Forecast Month Selector (Additive Component)
 // ----------------------------------------------------------------------
-function RevenueTrendChart({ comparison, forecasts }) {
+function FutureForecastSelector({
+  baseYear,
+  baseMonthNum,
+  pickerYear,
+  setPickerYear,
+  pickerMonth,
+  setPickerMonth,
+  onApplyForecast,
+  onResetDefault,
+  isCustomActive,
+  customPeriod,
+}) {
+  // Dynamically generate selectable future years based on latest actual year
+  const startYear = baseYear || 2026;
+  const availableYears = useMemo(() => {
+    return Array.from({ length: 6 }, (_, i) => startYear + i);
+  }, [startYear]);
+
+  const isCurrentBaseYear = pickerYear === startYear;
+
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        p: 2,
+        mb: 3,
+        borderRadius: 2,
+        border: "1px solid #dce5ee",
+        bgcolor: "#ffffff",
+        boxShadow: "0 10px 24px rgba(15, 23, 42, 0.045)",
+      }}
+    >
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        justifyContent="space-between"
+        alignItems={{ xs: "flex-start", md: "center" }}
+        spacing={2}
+      >
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Box
+            sx={{
+              width: 36,
+              height: 36,
+              borderRadius: 1.5,
+              bgcolor: isCustomActive ? "#fef3c7" : "#e0f2fe",
+              color: isCustomActive ? "#92400e" : "#0284c7",
+              display: "grid",
+              placeItems: "center",
+            }}
+          >
+            <CalendarIcon fontSize="small" />
+          </Box>
+          <Box>
+            <Typography variant="subtitle2" sx={{ fontWeight: 850, color: "#082f49" }}>
+              Future Forecast Month Selector
+            </Typography>
+            <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
+              {isCustomActive
+                ? `Active Custom Forecast: ${customPeriod}`
+                : "Default Mode: Standard 3-Month Forward Outlook"}
+            </Typography>
+          </Box>
+        </Stack>
+
+        {/* Dynamic Controls: Year + Month Dropdowns + Action Buttons */}
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1.5}
+          alignItems="center"
+          sx={{ width: { xs: "100%", md: "auto" } }}
+        >
+          {/* Year Select */}
+          <Select
+            size="small"
+            value={pickerYear}
+            onChange={(e) => {
+              const newYear = Number(e.target.value);
+              setPickerYear(newYear);
+              // If switching to base year and selected month is in the past, adjust month
+              if (newYear === startYear && (MONTH_INDEX_MAP[pickerMonth] || 0) <= baseMonthNum) {
+                const firstAvailable = ALL_MONTHS.find(
+                  (m) => (MONTH_INDEX_MAP[m] || 0) > baseMonthNum
+                );
+                if (firstAvailable) setPickerMonth(firstAvailable);
+              }
+            }}
+            sx={{ minWidth: 105, fontWeight: 750, bgcolor: "#f8fafc" }}
+          >
+            {availableYears.map((yr) => (
+              <MenuItem key={yr} value={yr}>
+                {yr}
+              </MenuItem>
+            ))}
+          </Select>
+
+          {/* Month Select */}
+          <Select
+            size="small"
+            value={pickerMonth}
+            onChange={(e) => setPickerMonth(e.target.value)}
+            sx={{ minWidth: 145, fontWeight: 750, bgcolor: "#f8fafc" }}
+          >
+            {ALL_MONTHS.map((m) => {
+              const mNum = MONTH_INDEX_MAP[m] || 0;
+              const isPastInBaseYear = isCurrentBaseYear && mNum <= baseMonthNum;
+              return (
+                <MenuItem key={m} value={m} disabled={isPastInBaseYear}>
+                  {m} {isPastInBaseYear ? "(Actual)" : ""}
+                </MenuItem>
+              );
+            })}
+          </Select>
+
+          {/* Apply Button */}
+          <Button
+            variant="contained"
+            size="small"
+            onClick={onApplyForecast}
+            sx={{
+              textTransform: "none",
+              fontWeight: 850,
+              bgcolor: "#0B3041",
+              px: 2,
+              height: 38,
+              borderRadius: 1.5,
+              "&:hover": { bgcolor: "#071b2a" },
+            }}
+          >
+            View Forecast
+          </Button>
+
+          {/* Reset to Default 3-Month View (Visible when custom month is active) */}
+          {isCustomActive && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<ResetIcon />}
+              onClick={onResetDefault}
+              sx={{
+                textTransform: "none",
+                fontWeight: 800,
+                color: "#92400e",
+                borderColor: "#fcd34d",
+                bgcolor: "#fffbeb",
+                height: 38,
+                borderRadius: 1.5,
+                "&:hover": { bgcolor: "#fef3c7", borderColor: "#f59e0b" },
+              }}
+            >
+              Default 3-Month View
+            </Button>
+          )}
+        </Stack>
+      </Stack>
+
+      {/* Note for farther future months */}
+      {isCustomActive && (
+        <Box
+          sx={{
+            mt: 1.5,
+            pt: 1.25,
+            borderTop: "1px dashed #e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
+          <InfoIcon sx={{ fontSize: 16, color: "#0284c7", shrink: 0 }} />
+          <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
+            Forecast accuracy may decrease for farther future months due to limited historical training data.
+          </Typography>
+        </Box>
+      )}
+    </Paper>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Interactive Line Chart (Actuals vs Single/Default Forecast)
+// ----------------------------------------------------------------------
+function RevenueTrendChart({ comparison, forecasts, customSelectedMonth = null }) {
   const [hoveredPoint, setHoveredPoint] = useState(null);
 
   const width = 880;
@@ -96,30 +309,48 @@ function RevenueTrendChart({ comparison, forecasts }) {
   const innerHeight = height - padding.top - padding.bottom;
 
   const actuals = (comparison || []).filter((r) => r.current_year_revenue != null);
-  const periods = [...new Set((forecasts || []).map((r) => r.period))];
+
+  // If a specific custom forecast month is selected, display ONLY that single forecast month on graph.
+  // Otherwise, display default 3-month forecast.
+  const rawPeriods = [...new Set((forecasts || []).map((r) => r.period))];
+  const periods = customSelectedMonth
+    ? rawPeriods.filter((p) => p === customSelectedMonth)
+    : rawPeriods.slice(0, 3);
 
   const forecastTotals = periods.map((period) => ({
     period,
-    value: forecasts
+    value: (forecasts || [])
       .filter((r) => r.period === period)
       .reduce((sum, r) => sum + Number(r.forecast_revenue || 0), 0),
   }));
 
   const allPoints = [
-    ...actuals.map((r) => ({
-      label: r.month,
-      shortLabel: (r.month || "").slice(0, 3),
-      value: Number(r.current_year_revenue),
-      type: "actual",
-      periodLabel: `${r.month} 2026 Actual`,
-    })),
-    ...forecastTotals.map((r) => ({
-      label: r.period,
-      shortLabel: (r.period || "").split(" ")[0].slice(0, 3),
-      value: Number(r.value),
-      type: "forecast",
-      periodLabel: `${r.period} Forecast`,
-    })),
+    ...actuals.map((r) => {
+      const yearStr = (r.period || "").split(" ")[1] || "2026";
+      const yearSuffix = yearStr.slice(-2);
+      return {
+        label: r.month,
+        shortLabel: (r.month || "").slice(0, 3),
+        yearSuffix,
+        value: Number(r.current_year_revenue),
+        type: "actual",
+        periodLabel: `${r.month} ${yearStr} Actual`,
+      };
+    }),
+    ...forecastTotals.map((r) => {
+      const parts = (r.period || "").split(" ");
+      const monthName = parts[0] || "";
+      const yearStr = parts[1] || "2026";
+      const yearSuffix = yearStr.slice(-2);
+      return {
+        label: r.period,
+        shortLabel: monthName.slice(0, 3),
+        yearSuffix,
+        value: Number(r.value),
+        type: "forecast",
+        periodLabel: `${r.period} Forecast`,
+      };
+    }),
   ];
 
   const maxVal = Math.max(...allPoints.map((p) => p.value).filter(Number.isFinite), 1);
@@ -262,14 +493,14 @@ function RevenueTrendChart({ comparison, forecasts }) {
                   fontWeight="700"
                   fill="#475569"
                 >
-                  {pt.shortLabel} 26
+                  {pt.shortLabel} '{pt.yearSuffix}
                 </text>
                 {isHovered && (
                   <g>
                     <rect
-                      x={cx - 65}
+                      x={cx - 75}
                       y={cy - 40}
-                      width="130"
+                      width="150"
                       height="28"
                       rx="6"
                       fill="#0f172a"
@@ -304,7 +535,7 @@ function RevenueTrendChart({ comparison, forecasts }) {
           <Stack direction="row" spacing={1} alignItems="center">
             <Box sx={{ width: 20, height: 4, bgcolor: "#0e7490", borderRadius: 1 }} />
             <Typography variant="caption" sx={{ fontWeight: 700, color: "#334155" }}>
-              Verified 2026 Actual Revenue
+              Verified Actual Revenue
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
@@ -323,9 +554,204 @@ function RevenueTrendChart({ comparison, forecasts }) {
 }
 
 // ----------------------------------------------------------------------
-// Category Analysis View (Horizontal Bars + Sorting)
 // ----------------------------------------------------------------------
-function CategoryAnalysisView({ forecasts, latestActuals, selectedPeriod, onPeriodChange, periods }) {
+// Category Grouped Bar Chart (Graphical View)
+// ----------------------------------------------------------------------
+function CategoryGroupedBarChart({ categoryData, latestActualMonth, latestActualYear, selectedPeriod }) {
+  const [hoveredIdx, setHoveredIdx] = useState(null);
+
+  const width = 920;
+  const rowHeight = 44;
+  const padding = { top: 25, right: 95, bottom: 40, left: 190 };
+  const height = padding.top + padding.bottom + categoryData.length * rowHeight;
+  const innerWidth = width - padding.left - padding.right;
+
+  const maxVal = Math.max(
+    ...categoryData.map((c) => Math.max(Number(c.actualRevenue || 0), Number(c.forecastRevenue || 0))),
+    1
+  );
+
+  const xTicks = [0, 0.25, 0.5, 0.75, 1.0];
+  const barHeight = 13;
+
+  return (
+    <Paper
+      sx={{
+        p: 2.5,
+        borderRadius: 2,
+        border: "1px solid #e2e8f0",
+        bgcolor: "#ffffff",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+      }}
+    >
+      {/* Legend & Header */}
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        justifyContent="space-between"
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        sx={{ mb: 2, pb: 2, borderBottom: "1px solid #f1f5f9" }}
+      >
+        <Box>
+          <Typography variant="subtitle1" sx={{ fontWeight: 850, color: "#082f49" }}>
+            {latestActualMonth || "July"} {latestActualYear || 2026} Actual vs. {selectedPeriod} Forecast
+          </Typography>
+          <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
+            Side-by-side revenue comparison across all 14 revenue categories (in LKR Millions)
+          </Typography>
+        </Box>
+
+        <Stack direction="row" spacing={3} alignItems="center">
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Box sx={{ width: 14, height: 14, bgcolor: "#0e7490", borderRadius: 0.5 }} />
+            <Typography variant="caption" sx={{ fontWeight: 750, color: "#334155" }}>
+              {latestActualMonth || "July"} {latestActualYear || 2026} Actual
+            </Typography>
+          </Stack>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Box sx={{ width: 14, height: 14, bgcolor: "#d97706", borderRadius: 0.5 }} />
+            <Typography variant="caption" sx={{ fontWeight: 750, color: "#334155" }}>
+              {selectedPeriod} Forecast
+            </Typography>
+          </Stack>
+        </Stack>
+      </Stack>
+
+      {/* SVG Grouped Bar Chart */}
+      <Box sx={{ width: "100%", overflowX: "auto" }}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ width: "100%", minWidth: 720, height: "auto", display: "block" }}
+        >
+          {/* Vertical Gridlines */}
+          {xTicks.map((ratio) => {
+            const val = maxVal * ratio;
+            const xPos = padding.left + ratio * innerWidth;
+            return (
+              <g key={ratio}>
+                <line
+                  x1={xPos}
+                  x2={xPos}
+                  y1={padding.top}
+                  y2={height - padding.bottom}
+                  stroke="#e2e8f0"
+                  strokeDasharray={ratio === 0 ? "0" : "3 3"}
+                  strokeWidth="1"
+                />
+                <text
+                  x={xPos}
+                  y={height - padding.bottom + 18}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#64748b"
+                  fontWeight="600"
+                >
+                  {formatCurrency(val)}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Category Rows */}
+          {categoryData.map((item, idx) => {
+            const rowY = padding.top + idx * rowHeight;
+            const isHovered = hoveredIdx === idx;
+            const actualWidth = Math.max((Number(item.actualRevenue || 0) / maxVal) * innerWidth, 2);
+            const forecastWidth = Math.max((Number(item.forecastRevenue || 0) / maxVal) * innerWidth, 2);
+
+            return (
+              <g
+                key={item.category}
+                onMouseEnter={() => setHoveredIdx(idx)}
+                onMouseLeave={() => setHoveredIdx(null)}
+                style={{ cursor: "pointer" }}
+              >
+                {/* Row Hover Background */}
+                <rect
+                  x={10}
+                  y={rowY}
+                  width={width - 20}
+                  height={rowHeight - 4}
+                  rx={6}
+                  fill={isHovered ? "#f0f9ff" : idx % 2 === 0 ? "#f8fafc" : "transparent"}
+                />
+
+                {/* Category Label */}
+                <text
+                  x={padding.left - 14}
+                  y={rowY + 24}
+                  textAnchor="end"
+                  fontSize="12"
+                  fontWeight="800"
+                  fill={isHovered ? "#0284c7" : "#1e293b"}
+                >
+                  {item.category}
+                </text>
+
+                {/* Actual Bar */}
+                <rect
+                  x={padding.left}
+                  y={rowY + 6}
+                  width={actualWidth}
+                  height={barHeight}
+                  rx={3}
+                  fill="#0e7490"
+                  opacity={isHovered ? 1 : 0.9}
+                  style={{ transition: "width 0.3s ease" }}
+                />
+                <text
+                  x={padding.left + actualWidth + 6}
+                  y={rowY + 16}
+                  fontSize="10"
+                  fontWeight="750"
+                  fill="#0e7490"
+                >
+                  {formatCurrency(item.actualRevenue)}
+                </text>
+
+                {/* Forecast Bar */}
+                <rect
+                  x={padding.left}
+                  y={rowY + 22}
+                  width={forecastWidth}
+                  height={barHeight}
+                  rx={3}
+                  fill="#d97706"
+                  opacity={isHovered ? 1 : 0.9}
+                  style={{ transition: "width 0.3s ease" }}
+                />
+                <text
+                  x={padding.left + forecastWidth + 6}
+                  y={rowY + 32}
+                  fontSize="10"
+                  fontWeight="750"
+                  fill="#d97706"
+                >
+                  {formatCurrency(item.forecastRevenue)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </Box>
+
+      {/* Footer */}
+      <Box sx={{ mt: 2, pt: 1.5, borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
+          Comparing verified baseline actuals against active selected forecast horizon.
+        </Typography>
+        <Typography variant="caption" sx={{ color: "#082f49", fontWeight: 750 }}>
+          14 Revenue Categories Verified
+        </Typography>
+      </Box>
+    </Paper>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Category Analysis View (Horizontal Bars + Sorting + Graphical View)
+// ----------------------------------------------------------------------
+function CategoryAnalysisView({ forecasts, latestActuals, selectedPeriod, onPeriodChange, periods, latestActualMonth, latestActualYear }) {
+  const [viewMode, setViewMode] = useState("existing"); // 'existing' | 'graphical'
   const [sortMode, setSortMode] = useState("highest"); // 'highest', 'lowest', 'growing', 'declining'
   const [selectedCat, setSelectedCat] = useState(null);
 
@@ -386,12 +812,52 @@ function CategoryAnalysisView({ forecasts, latestActuals, selectedPeriod, onPeri
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1.5} alignItems="center">
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems="center">
+          {/* View Toggle: Existing View vs Graphical View */}
+          <Stack direction="row" spacing={0.5} sx={{ bgcolor: "#f1f5f9", p: 0.5, borderRadius: 1.5, border: "1px solid #e2e8f0" }}>
+            <Button
+              size="small"
+              onClick={() => setViewMode("existing")}
+              sx={{
+                textTransform: "none",
+                fontWeight: 850,
+                fontSize: "0.8rem",
+                px: 1.75,
+                py: 0.5,
+                borderRadius: 1.2,
+                bgcolor: viewMode === "existing" ? "#ffffff" : "transparent",
+                color: viewMode === "existing" ? "#082f49" : "#64748b",
+                boxShadow: viewMode === "existing" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                "&:hover": { bgcolor: viewMode === "existing" ? "#ffffff" : "#e2e8f0" },
+              }}
+            >
+              Existing View
+            </Button>
+            <Button
+              size="small"
+              onClick={() => setViewMode("graphical")}
+              sx={{
+                textTransform: "none",
+                fontWeight: 850,
+                fontSize: "0.8rem",
+                px: 1.75,
+                py: 0.5,
+                borderRadius: 1.2,
+                bgcolor: viewMode === "graphical" ? "#ffffff" : "transparent",
+                color: viewMode === "graphical" ? "#082f49" : "#64748b",
+                boxShadow: viewMode === "graphical" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                "&:hover": { bgcolor: viewMode === "graphical" ? "#ffffff" : "#e2e8f0" },
+              }}
+            >
+              Graphical View
+            </Button>
+          </Stack>
+
           <Select
             size="small"
             value={selectedPeriod}
             onChange={(e) => onPeriodChange(e.target.value)}
-            sx={{ minWidth: 150, fontWeight: 700, bgcolor: "#ffffff" }}
+            sx={{ minWidth: 160, fontWeight: 700, bgcolor: "#ffffff" }}
           >
             {periods.map((p) => (
               <MenuItem key={p} value={p}>
@@ -415,118 +881,128 @@ function CategoryAnalysisView({ forecasts, latestActuals, selectedPeriod, onPeri
         </Stack>
       </Stack>
 
-      {/* Horizontal Bar Chart Cards */}
-      <Grid container spacing={2}>
-        {sortedCategories.map((item, idx) => {
-          const pctOfMax = (item.forecastRevenue / maxVal) * 100;
-          const isSelected = selectedCat === item.category;
+      {/* Conditionally Render: Graphical View vs Existing Cards View */}
+      {viewMode === "graphical" ? (
+        <CategoryGroupedBarChart
+          categoryData={sortedCategories}
+          latestActualMonth={latestActualMonth}
+          latestActualYear={latestActualYear}
+          selectedPeriod={selectedPeriod}
+        />
+      ) : (
+        /* Existing Horizontal Bar Chart Cards */
+        <Grid container spacing={2}>
+          {sortedCategories.map((item, idx) => {
+            const pctOfMax = (item.forecastRevenue / maxVal) * 100;
+            const isSelected = selectedCat === item.category;
 
-          return (
-            <Grid item xs={12} md={6} key={item.category}>
-              <Paper
-                onClick={() => setSelectedCat(isSelected ? null : item.category)}
-                sx={{
-                  p: 2.25,
-                  borderRadius: 2,
-                  border: isSelected ? "2px solid #0284c7" : "1px solid #e2e8f0",
-                  bgcolor: isSelected ? "#f0f9ff" : "#ffffff",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-                  "&:hover": { borderColor: "#0284c7", transform: "translateY(-1px)" },
-                }}
-              >
-                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
-                  <Stack direction="row" spacing={1.25} alignItems="center">
-                    <Box
+            return (
+              <Grid item xs={12} md={6} key={item.category}>
+                <Paper
+                  onClick={() => setSelectedCat(isSelected ? null : item.category)}
+                  sx={{
+                    p: 2.25,
+                    borderRadius: 2,
+                    border: isSelected ? "2px solid #0284c7" : "1px solid #e2e8f0",
+                    bgcolor: isSelected ? "#f0f9ff" : "#ffffff",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+                    "&:hover": { borderColor: "#0284c7", transform: "translateY(-1px)" },
+                  }}
+                >
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
+                    <Stack direction="row" spacing={1.25} alignItems="center">
+                      <Box
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          display: "grid",
+                          placeItems: "center",
+                          borderRadius: "50%",
+                          bgcolor: idx < 3 ? "#0284c7" : "#e2e8f0",
+                          color: idx < 3 ? "#ffffff" : "#475569",
+                          fontWeight: 850,
+                          fontSize: "0.72rem",
+                        }}
+                      >
+                        {idx + 1}
+                      </Box>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, color: "#0f172a" }}>
+                        {item.category}
+                      </Typography>
+                    </Stack>
+
+                    <Chip
+                      size="small"
+                      label={`${safePercent(item.changePct)}`}
+                      icon={
+                        item.trend === "Growing" ? (
+                          <TrendingUpIcon sx={{ fontSize: "14px !important" }} />
+                        ) : item.trend === "Declining" ? (
+                          <TrendingDownIcon sx={{ fontSize: "14px !important" }} />
+                        ) : (
+                          <TrendingFlatIcon sx={{ fontSize: "14px !important" }} />
+                        )
+                      }
                       sx={{
-                        width: 24,
-                        height: 24,
-                        display: "grid",
-                        placeItems: "center",
-                        borderRadius: "50%",
-                        bgcolor: idx < 3 ? "#0284c7" : "#e2e8f0",
-                        color: idx < 3 ? "#ffffff" : "#475569",
+                        height: 22,
                         fontWeight: 800,
-                        fontSize: "0.72rem",
+                        fontSize: "0.7rem",
+                        bgcolor:
+                          item.trend === "Growing"
+                            ? "#dcfce7"
+                            : item.trend === "Declining"
+                            ? "#fee2e2"
+                            : "#f1f5f9",
+                        color:
+                          item.trend === "Growing"
+                            ? "#15803d"
+                            : item.trend === "Declining"
+                            ? "#b91c1c"
+                            : "#475569",
                       }}
-                    >
-                      {idx + 1}
-                    </Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 800, color: "#0f172a" }}>
-                      {item.category}
-                    </Typography>
+                    />
                   </Stack>
 
-                  <Chip
-                    size="small"
-                    label={`${safePercent(item.changePct)}`}
-                    icon={
-                      item.trend === "Growing" ? (
-                        <TrendingUpIcon sx={{ fontSize: "14px !important" }} />
-                      ) : item.trend === "Declining" ? (
-                        <TrendingDownIcon sx={{ fontSize: "14px !important" }} />
-                      ) : (
-                        <TrendingFlatIcon sx={{ fontSize: "14px !important" }} />
-                      )
-                    }
-                    sx={{
-                      height: 22,
-                      fontWeight: 800,
-                      fontSize: "0.7rem",
-                      bgcolor:
-                        item.trend === "Growing"
-                          ? "#dcfce7"
-                          : item.trend === "Declining"
-                          ? "#fee2e2"
-                          : "#f1f5f9",
-                      color:
-                        item.trend === "Growing"
-                          ? "#15803d"
-                          : item.trend === "Declining"
-                          ? "#b91c1c"
-                          : "#475569",
-                    }}
-                  />
-                </Stack>
+                  <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ my: 1 }}>
+                    <Box>
+                      <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
+                        Latest Actual ({latestActualMonth || "July"})
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 800, color: "#475569" }}>
+                        {formatCurrency(item.actualRevenue)}
+                      </Typography>
+                    </Box>
 
-                <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ my: 1 }}>
-                  <Box>
-                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
-                      Latest Actual (June)
-                    </Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 800, color: "#475569" }}>
-                      {formatCurrency(item.actualRevenue)}
-                    </Typography>
+                    <Box sx={{ textAlign: "right" }}>
+                      <Typography variant="caption" sx={{ color: "#0284c7", fontWeight: 800 }}>
+                        Expected Forecast
+                      </Typography>
+                      <Typography variant="h6" sx={{ fontWeight: 900, color: "#0284c7" }}>
+                        {formatCurrency(item.forecastRevenue)}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* Progress Bar */}
+                  <Box sx={{ height: 7, width: "100%", bgcolor: "#edf2f7", borderRadius: 3.5, overflow: "hidden", mt: 1 }}>
+                    <Box
+                      sx={{
+                        height: "100%",
+                        width: `${Math.max(pctOfMax, 2)}%`,
+                        bgcolor: idx === 0 ? "#0284c7" : idx < 3 ? "#0ea5e9" : "#94a3b8",
+                        borderRadius: 3.5,
+                        transition: "width 0.35s ease",
+                      }}
+                    />
                   </Box>
-
-                  <Box sx={{ textAlign: "right" }}>
-                    <Typography variant="caption" sx={{ color: "#0284c7", fontWeight: 800 }}>
-                      Expected Forecast
-                    </Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: "#0284c7" }}>
-                      {formatCurrency(item.forecastRevenue)}
-                    </Typography>
-                  </Box>
-                </Stack>
-
-                {/* Progress Bar */}
-                <Box sx={{ height: 7, width: "100%", bgcolor: "#edf2f7", borderRadius: 3.5, overflow: "hidden", mt: 1 }}>
-                  <Box
-                    sx={{
-                      height: "100%",
-                      width: `${Math.max(pctOfMax, 2)}%`,
-                      bgcolor: idx === 0 ? "#0284c7" : idx < 3 ? "#0ea5e9" : "#94a3b8",
-                      borderRadius: 3.5,
-                      transition: "width 0.35s ease",
-                    }}
-                  />
-                </Box>
-              </Paper>
-            </Grid>
-          );
-        })}
-      </Grid>
+                </Paper>
+              </Grid>
+            );
+          })}
+        </Grid>
+      )}
     </Box>
   );
 }
@@ -534,7 +1010,7 @@ function CategoryAnalysisView({ forecasts, latestActuals, selectedPeriod, onPeri
 // ----------------------------------------------------------------------
 // Actual vs Forecast Table View
 // ----------------------------------------------------------------------
-function ForecastTableView({ forecasts, latestActuals, selectedPeriod, onPeriodChange, periods }) {
+function ForecastTableView({ forecasts, latestActuals, selectedPeriod, onPeriodChange, periods, latestActualMonth, latestActualYear }) {
   const tableData = useMemo(() => {
     if (!forecasts) return [];
     const periodForecasts = forecasts.filter((f) => f.period === selectedPeriod);
@@ -601,7 +1077,7 @@ function ForecastTableView({ forecasts, latestActuals, selectedPeriod, onPeriodC
             <TableRow>
               <TableCell sx={{ fontWeight: 800, color: "#475569" }}>Revenue Category</TableCell>
               <TableCell align="right" sx={{ fontWeight: 800, color: "#475569" }}>
-                June 2026 Actual
+                {latestActualMonth || "July"} {latestActualYear || 2026} Actual
               </TableCell>
               <TableCell align="right" sx={{ fontWeight: 800, color: "#0284c7" }}>
                 {selectedPeriod} Forecast
@@ -696,7 +1172,7 @@ function ForecastTableView({ forecasts, latestActuals, selectedPeriod, onPeriodC
 // ----------------------------------------------------------------------
 // Data Updates & Synchronization Status View
 // ----------------------------------------------------------------------
-function DataUpdatesView({ updateStatus, modelInfo }) {
+function DataUpdatesView({ updateStatus, modelInfo, latestActualMonth, comparison }) {
   return (
     <Box>
       <Box sx={{ mb: 3 }}>
@@ -731,7 +1207,7 @@ function DataUpdatesView({ updateStatus, modelInfo }) {
                   Data Available Through
                 </Typography>
                 <Typography variant="body1" sx={{ fontWeight: 850, color: "#0f172a" }}>
-                  {updateStatus.latest_available_month || "June 2026"}
+                  {updateStatus.latest_available_month || (latestActualMonth ? `${latestActualMonth} 2026` : "July 2026")}
                 </Typography>
               </Box>
 
@@ -740,7 +1216,7 @@ function DataUpdatesView({ updateStatus, modelInfo }) {
                   Verified Trial Balance Files
                 </Typography>
                 <Typography variant="body1" sx={{ fontWeight: 850, color: "#0f172a" }}>
-                  {updateStatus.num_current_year_files || 6} files (January – June 2026)
+                  {updateStatus.num_current_year_files || 8} files ({updateStatus.first_available_month || "January"} to {latestActualMonth || (updateStatus.latest_available_month ? updateStatus.latest_available_month.split(" ")[0] : "July")})
                 </Typography>
               </Box>
 
@@ -749,7 +1225,7 @@ function DataUpdatesView({ updateStatus, modelInfo }) {
                   Latest Ingested File
                 </Typography>
                 <Typography variant="body1" sx={{ fontWeight: 850, color: "#0f172a" }}>
-                  {updateStatus.latest_upload_filename || "Jun-26 Revenue.txt"}
+                  {updateStatus.latest_upload_filename || "N/A"}
                 </Typography>
               </Box>
             </Stack>
@@ -808,21 +1284,36 @@ function DataUpdatesView({ updateStatus, modelInfo }) {
 }
 
 // ----------------------------------------------------------------------
-// Main Export Component: RevenueForecasting
+// Main Export Component: RevenueForecasting (4 Locked Tabs)
 // ----------------------------------------------------------------------
 export default function RevenueForecasting() {
   const navigate = useNavigate();
   const { logout } = useAuth();
 
-  const [currentTab, setCurrentTab] = useState(0); // 0: Overview, 1: Trend, 2: Categories, 3: Table, 4: Updates
+  const [currentTab, setCurrentTab] = useState(0); // 0: Overview, 1: Categories, 2: Details, 3: Updates
   const [data, setData] = useState(null);
-  const [selectedPeriod, setSelectedPeriod] = useState("July 2026");
+  const [selectedPeriod, setSelectedPeriod] = useState("August 2026");
+  const [customForecastMonth, setCustomForecastMonth] = useState(null); // null = default 3-month mode
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
 
-  const fetchForecast = useCallback(async (isBackground = false) => {
+  // Selector dynamic states
+  const [pickerYear, setPickerYear] = useState(2026);
+  const [pickerMonth, setPickerMonth] = useState("August");
+
+  // In-flight request cancellation tracking & custom period sync refs
+  const currentRequestIdRef = useRef(0);
+  const customForecastMonthRef = useRef(customForecastMonth);
+  const hasInitializedPickerRef = useRef(false);
+
+  useEffect(() => {
+    customForecastMonthRef.current = customForecastMonth;
+  }, [customForecastMonth]);
+
+  const fetchForecast = useCallback(async (isBackground = false, customParams = null) => {
+    const reqId = ++currentRequestIdRef.current;
     if (isBackground) {
       setRefreshing(true);
     } else {
@@ -830,41 +1321,87 @@ export default function RevenueForecasting() {
     }
     setError(null);
     try {
-      const resp = await getRevenueForecast();
+      const resp = await getRevenueForecast(customParams || {});
+      if (reqId !== currentRequestIdRef.current) {
+        // Discard stale in-flight response to prevent race condition overwrite
+        return;
+      }
       if (!resp?.forecasts || !Array.isArray(resp.forecasts)) {
         throw new Error("Invalid forecast data structure returned by API.");
       }
       setData(resp);
-      setSelectedPeriod((current) =>
-        resp.forecasts.some((r) => r.period === current)
-          ? current
-          : resp.forecasts[0]?.period || "July 2026"
-      );
+
+      // Determine and synchronize selected period
+      if (customParams?.target_month && customParams?.target_year) {
+        const periodStr = `${ALL_MONTHS[customParams.target_month - 1]} ${customParams.target_year}`;
+        setSelectedPeriod(periodStr);
+        setCustomForecastMonth(periodStr);
+        setPickerYear(customParams.target_year);
+        setPickerMonth(ALL_MONTHS[customParams.target_month - 1]);
+      } else {
+        setSelectedPeriod((current) =>
+          resp.forecasts.some((r) => r.period === current)
+            ? current
+            : resp.forecasts[0]?.period || "August 2026"
+        );
+      }
       setLastRefreshedAt(new Date());
     } catch (err) {
-      setError(err.message || "Failed to load forecast data.");
+      if (reqId === currentRequestIdRef.current) {
+        setError(err.message || "Failed to load forecast data.");
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (reqId === currentRequestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
+  // Initial mount load and automated 5-minute background refresh
   useEffect(() => {
     fetchForecast();
-    // 5-minute automated dashboard refresh interval (does not retrain model)
-    const intervalId = window.setInterval(() => fetchForecast(true), REFRESH_INTERVAL);
+    // 5-minute automated dashboard refresh interval
+    const intervalId = window.setInterval(() => {
+      if (customForecastMonthRef.current) {
+        const parts = customForecastMonthRef.current.split(" ");
+        const mNum = MONTH_INDEX_MAP[parts[0]];
+        const yNum = Number(parts[1]);
+        fetchForecast(true, { target_month: mNum, target_year: yNum });
+      } else {
+        fetchForecast(true);
+      }
+    }, REFRESH_INTERVAL);
     return () => window.clearInterval(intervalId);
   }, [fetchForecast]);
+
+  const modelInfo = data?.model_information || {};
+  const updateStatus = data?.data_update_status || {};
+  const latestActuals = data?.latest_actual_by_category || {};
+
+  const comparison = data?.comparison || [];
+  const actualComparisonRows = comparison.filter((r) => r.current_year_revenue != null);
+  const latestActualRow = actualComparisonRows.length > 0 ? actualComparisonRows[actualComparisonRows.length - 1] : null;
+  const currentMonthRevenue = latestActualRow?.current_year_revenue;
+  const currentMonthName = latestActualRow?.month || (updateStatus.latest_available_month ? updateStatus.latest_available_month.split(" ")[0] : "July");
+  const currentYearVal = modelInfo.current_year || 2026;
+  const firstMonthName = updateStatus.first_available_month || (actualComparisonRows.length > 0 ? actualComparisonRows[0].month : "January");
+  const latestActualMonthNum = MONTH_INDEX_MAP[currentMonthName] || 7;
+
+  // Sync default picker values once when data is first loaded
+  useEffect(() => {
+    if (!hasInitializedPickerRef.current && currentYearVal && latestActualMonthNum) {
+      hasInitializedPickerRef.current = true;
+      setPickerYear(currentYearVal);
+      const nextMonthIndex = latestActualMonthNum % 12; // e.g. July (7) -> August (index 7)
+      setPickerMonth(ALL_MONTHS[nextMonthIndex]);
+    }
+  }, [currentYearVal, latestActualMonthNum]);
 
   const periods = useMemo(
     () => [...new Set((data?.forecasts || []).map((r) => r.period))],
     [data]
   );
-
-  const comparison = data?.comparison || [];
-  const latestActualRow = comparison.length > 0 ? comparison[comparison.length - 1] : null;
-  const currentMonthRevenue = latestActualRow?.current_year_revenue;
-  const currentMonthName = latestActualRow?.month || "June";
 
   const selectedForecastRows = (data?.forecasts || []).filter((r) => r.period === selectedPeriod);
   const nextMonthForecastTotal = selectedForecastRows.reduce(
@@ -877,9 +1414,37 @@ export default function RevenueForecasting() {
       ? ((nextMonthForecastTotal - currentMonthRevenue) / currentMonthRevenue) * 100
       : null;
 
-  const modelInfo = data?.model_information || {};
-  const updateStatus = data?.data_update_status || {};
-  const latestActuals = data?.latest_actual_by_category || {};
+  // Unified period change handler across all tabs
+  const handlePeriodChange = (newPeriod) => {
+    setSelectedPeriod(newPeriod);
+    const parts = newPeriod.split(" ");
+    if (parts.length === 2) {
+      if (MONTH_INDEX_MAP[parts[0]]) setPickerMonth(parts[0]);
+      const yr = Number(parts[1]);
+      if (!isNaN(yr)) setPickerYear(yr);
+    }
+    if (customForecastMonth) {
+      setCustomForecastMonth(newPeriod);
+    }
+  };
+
+  // Handler for custom future month selection
+  const handleApplyForecast = () => {
+    const targetMonthNum = MONTH_INDEX_MAP[pickerMonth];
+    const targetPeriodStr = `${pickerMonth} ${pickerYear}`;
+    setCustomForecastMonth(targetPeriodStr);
+    setSelectedPeriod(targetPeriodStr);
+    fetchForecast(false, { target_month: targetMonthNum, target_year: pickerYear });
+  };
+
+  // Handler for resetting back to default 3-month forecast view
+  const handleResetDefault = () => {
+    setCustomForecastMonth(null);
+    const nextMonthIndex = latestActualMonthNum % 12;
+    setPickerYear(currentYearVal || 2026);
+    setPickerMonth(ALL_MONTHS[nextMonthIndex]);
+    fetchForecast(false, {});
+  };
 
   const handleLogout = async () => {
     await logout();
@@ -1049,7 +1614,16 @@ export default function RevenueForecasting() {
                     </Stack>
 
                     <Button
-                      onClick={() => fetchForecast(true)}
+                      onClick={() => {
+                        if (customForecastMonth) {
+                          const parts = customForecastMonth.split(" ");
+                          const mNum = MONTH_INDEX_MAP[parts[0]];
+                          const yNum = Number(parts[1]);
+                          fetchForecast(true, { target_month: mNum, target_year: yNum });
+                        } else {
+                          fetchForecast(true);
+                        }
+                      }}
                       disabled={refreshing}
                       startIcon={<RefreshIcon />}
                       variant="outlined"
@@ -1068,7 +1642,7 @@ export default function RevenueForecasting() {
                   </Stack>
 
                   {/* 6 Top Clean KPI Cards */}
-                  <Grid container spacing={2.5} sx={{ mb: 3.5 }}>
+                  <Grid container spacing={2.5} sx={{ mb: 3 }}>
                     {/* Card 1: Current Month Revenue */}
                     <Grid item xs={12} sm={6} lg={2}>
                       <Card sx={cardStyle}>
@@ -1080,18 +1654,18 @@ export default function RevenueForecasting() {
                             {formatCurrency(currentMonthRevenue)}
                           </Typography>
                           <Typography variant="caption" sx={{ color: "#0284c7", fontWeight: 750, mt: 0.5, display: "block" }}>
-                            {currentMonthName} 2026 Actual
+                            {currentMonthName} {currentYearVal} Actual
                           </Typography>
                         </CardContent>
                       </Card>
                     </Grid>
 
-                    {/* Card 2: Next Month Forecast */}
+                    {/* Card 2: Next Month Forecast / Selected Forecast */}
                     <Grid item xs={12} sm={6} lg={2}>
                       <Card sx={{ ...cardStyle, bgcolor: "#f0fdf4", borderColor: "#bbf7d0" }}>
                         <CardContent sx={{ p: "0 !important" }}>
                           <Typography variant="caption" sx={{ fontWeight: 800, color: "#166534", textTransform: "uppercase" }}>
-                            Next Month Forecast
+                            {customForecastMonth ? "Projected Revenue" : "Next Month Forecast"}
                           </Typography>
                           <Typography variant="h5" sx={{ fontWeight: 900, color: "#14532d", mt: 0.5 }}>
                             {formatCurrency(nextMonthForecastTotal)}
@@ -1161,7 +1735,7 @@ export default function RevenueForecasting() {
                       </Card>
                     </Grid>
 
-                    {/* Card 6: Data Through */}
+                    {/* Card 6: Data Verified Through */}
                     <Grid item xs={12} sm={6} lg={2}>
                       <Card sx={cardStyle}>
                         <CardContent sx={{ p: "0 !important" }}>
@@ -1169,17 +1743,31 @@ export default function RevenueForecasting() {
                             Data Verified Through
                           </Typography>
                           <Typography variant="body1" sx={{ fontWeight: 900, color: "#082f49", mt: 0.5, lineHeight: 1.3 }}>
-                            {updateStatus.latest_available_month || "June 2026"}
+                            {updateStatus.latest_available_month || `${currentMonthName} ${currentYearVal}`}
                           </Typography>
                           <Typography variant="caption" sx={{ color: "#0284c7", fontWeight: 750, mt: 0.5, display: "block" }}>
-                            {updateStatus.num_current_year_files || 6} files verified
+                            {updateStatus.num_current_year_files || 8} files verified
                           </Typography>
                         </CardContent>
                       </Card>
                     </Grid>
                   </Grid>
 
-                  {/* Sub-Navigation Tabs */}
+                  {/* Additive Dynamic Future Forecast Month Selector */}
+                  <FutureForecastSelector
+                    baseYear={currentYearVal}
+                    baseMonthNum={latestActualMonthNum}
+                    pickerYear={pickerYear}
+                    setPickerYear={setPickerYear}
+                    pickerMonth={pickerMonth}
+                    setPickerMonth={setPickerMonth}
+                    onApplyForecast={handleApplyForecast}
+                    onResetDefault={handleResetDefault}
+                    isCustomActive={Boolean(customForecastMonth)}
+                    customPeriod={customForecastMonth}
+                  />
+
+                  {/* Strictly 4 Sub-Navigation Tabs (No Revenue Trend Tab) */}
                   <Paper
                     elevation={0}
                     sx={{
@@ -1209,7 +1797,6 @@ export default function RevenueForecasting() {
                       }}
                     >
                       <Tab icon={<LineChartIcon fontSize="small" />} iconPosition="start" label="Revenue Overview" />
-                      <Tab icon={<LineChartIcon fontSize="small" />} iconPosition="start" label="Revenue Trend" />
                       <Tab icon={<BarChartIcon fontSize="small" />} iconPosition="start" label="Category Analysis" />
                       <Tab icon={<TableIcon fontSize="small" />} iconPosition="start" label="Forecast Details" />
                       <Tab icon={<SyncIcon fontSize="small" />} iconPosition="start" label="Data Updates" />
@@ -1225,17 +1812,21 @@ export default function RevenueForecasting() {
                           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
                             <Box>
                               <Typography variant="h6" sx={{ fontWeight: 850, color: "#082f49" }}>
-                                2026 Actual Revenue vs. Forecast Trend
+                                {customForecastMonth
+                                  ? `${currentYearVal} Actual Revenue vs. ${customForecastMonth} Forecast`
+                                  : `${currentYearVal} Actual Revenue vs. Forecast Trend`}
                               </Typography>
                               <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
-                                Verified monthly performance (Jan–Jun) followed by 3-month forecast outlook.
+                                {customForecastMonth
+                                  ? `Verified monthly performance (${firstMonthName.slice(0, 3)}–${currentMonthName.slice(0, 3)}) with single-point forecast for ${customForecastMonth}.`
+                                  : `Verified monthly performance (${firstMonthName.slice(0, 3)}–${currentMonthName.slice(0, 3)}) followed by 3-month forecast outlook.`}
                               </Typography>
                             </Box>
                             <Select
                               size="small"
                               value={selectedPeriod}
-                              onChange={(e) => setSelectedPeriod(e.target.value)}
-                              sx={{ minWidth: 140, fontWeight: 700, bgcolor: "#f8fafc" }}
+                              onChange={(e) => handlePeriodChange(e.target.value)}
+                              sx={{ minWidth: 150, fontWeight: 750, bgcolor: "#f8fafc" }}
                             >
                               {periods.map((p) => (
                                 <MenuItem key={p} value={p}>
@@ -1244,7 +1835,11 @@ export default function RevenueForecasting() {
                               ))}
                             </Select>
                           </Stack>
-                          <RevenueTrendChart comparison={comparison} forecasts={data?.forecasts} />
+                          <RevenueTrendChart
+                            comparison={comparison}
+                            forecasts={data?.forecasts}
+                            customSelectedMonth={customForecastMonth}
+                          />
                         </Paper>
                       </Grid>
 
@@ -1264,7 +1859,7 @@ export default function RevenueForecasting() {
                                 Baseline Performance
                               </Typography>
                               <Typography variant="body2" sx={{ fontWeight: 800, color: "#0f172a", mt: 0.5 }}>
-                                June 2026 closed at <strong>{formatCurrency(currentMonthRevenue)}</strong> across 14 revenue categories.
+                                {currentMonthName} {currentYearVal} closed at <strong>{formatCurrency(currentMonthRevenue)}</strong> across 14 revenue categories.
                               </Typography>
                             </Box>
 
@@ -1273,7 +1868,7 @@ export default function RevenueForecasting() {
                                 Forward Horizon ({selectedPeriod})
                               </Typography>
                               <Typography variant="body2" sx={{ fontWeight: 800, color: "#14532d", mt: 0.5 }}>
-                                Projected total revenue is <strong>{formatCurrency(nextMonthForecastTotal)}</strong> ({safePercent(forecastGrowthPct)} vs. June).
+                                Projected total revenue is <strong>{formatCurrency(nextMonthForecastTotal)}</strong> ({safePercent(forecastGrowthPct)} vs. {currentMonthName}).
                               </Typography>
                             </Box>
 
@@ -1299,46 +1894,40 @@ export default function RevenueForecasting() {
                     </Grid>
                   )}
 
-                  {/* TAB 1: REVENUE TREND */}
+                  {/* TAB 1: CATEGORY ANALYSIS */}
                   {currentTab === 1 && (
-                    <Paper sx={cardStyle}>
-                      <Box sx={{ mb: 2 }}>
-                        <Typography variant="h6" sx={{ fontWeight: 850, color: "#082f49" }}>
-                          Full Revenue Trajectory & Forecast Horizon
-                        </Typography>
-                        <Typography variant="body2" sx={{ color: "#64748b" }}>
-                          Monthly revenue progression from January through June 2026 actuals, and forward projections through September 2026.
-                        </Typography>
-                      </Box>
-                      <RevenueTrendChart comparison={comparison} forecasts={data?.forecasts} />
-                    </Paper>
-                  )}
-
-                  {/* TAB 2: CATEGORY ANALYSIS */}
-                  {currentTab === 2 && (
                     <CategoryAnalysisView
                       forecasts={data?.forecasts}
                       latestActuals={latestActuals}
                       selectedPeriod={selectedPeriod}
-                      onPeriodChange={setSelectedPeriod}
+                      onPeriodChange={handlePeriodChange}
                       periods={periods}
+                      latestActualMonth={currentMonthName}
+                      latestActualYear={currentYearVal}
                     />
                   )}
 
-                  {/* TAB 3: FORECAST DETAILS */}
-                  {currentTab === 3 && (
+                  {/* TAB 2: FORECAST DETAILS */}
+                  {currentTab === 2 && (
                     <ForecastTableView
                       forecasts={data?.forecasts}
                       latestActuals={latestActuals}
                       selectedPeriod={selectedPeriod}
-                      onPeriodChange={setSelectedPeriod}
+                      onPeriodChange={handlePeriodChange}
                       periods={periods}
+                      latestActualMonth={currentMonthName}
+                      latestActualYear={currentYearVal}
                     />
                   )}
 
-                  {/* TAB 4: DATA UPDATES */}
-                  {currentTab === 4 && (
-                    <DataUpdatesView updateStatus={updateStatus} modelInfo={modelInfo} />
+                  {/* TAB 3: DATA UPDATES */}
+                  {currentTab === 3 && (
+                    <DataUpdatesView
+                      updateStatus={updateStatus}
+                      modelInfo={modelInfo}
+                      latestActualMonth={currentMonthName}
+                      comparison={comparison}
+                    />
                   )}
                 </>
               )}

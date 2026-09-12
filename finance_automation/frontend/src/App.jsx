@@ -11,6 +11,7 @@ import UserDashboard from "./pages/UserDashboard";
 import UserProfile from "./pages/UserProfile";
 import AuthCallback from "./pages/AuthCallback";
 import RevenueForecasting from "./pages/RevenueForecasting";
+import AnomalyDetection from "./pages/AnomalyDetection";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -78,6 +79,15 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <RevenueForecasting />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/anomalies"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <AnomalyDetection />
               </ProtectedRoute>
             }
           />

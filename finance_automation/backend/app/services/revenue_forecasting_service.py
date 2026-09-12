@@ -159,8 +159,14 @@ def _previous_year_revenue(db: Session) -> pd.DataFrame:
     return py_df
 
 
-def get_revenue_forecast(db: Session) -> dict:
-    """Generates 3-month forward category & total revenue forecast using active ML model."""
+def get_revenue_forecast(
+    db: Session,
+    target_month: Optional[int] = None,
+    target_year: Optional[int] = None,
+    target_period: Optional[str] = None,
+    horizon: Optional[int] = None,
+) -> dict:
+    """Generates 3-month forward or custom-horizon category & total revenue forecast using active ML model."""
     artifact = _load_model_artifact()
     current = _historical_revenue(db)
     previous = _previous_year_revenue(db)
@@ -180,20 +186,40 @@ def get_revenue_forecast(db: Session) -> dict:
 
     current = current[current["revenue_category"].isin(categories)]
     latest_month = int(current["month_number"].max())
-    latest_date = pd.Timestamp(CURRENT_YEAR, latest_month, 1)
+    latest_year = int(current["period_year"].max()) if "period_year" in current.columns and not current["period_year"].empty else CURRENT_YEAR
+    latest_date = pd.Timestamp(latest_year, latest_month, 1)
+
+    # Parse target_period if provided as a string (e.g. "December 2026", "March 2027")
+    if target_period and (target_month is None or target_year is None):
+        parts = target_period.strip().split()
+        if len(parts) == 2:
+            m_name, y_str = parts[0].capitalize(), parts[1]
+            if m_name in MONTH_NUMBER and y_str.isdigit():
+                target_month = MONTH_NUMBER[m_name]
+                target_year = int(y_str)
+
+    # Determine recursive forecast horizon in months
+    if target_month is not None and target_year is not None:
+        steps_needed = (target_year - latest_year) * 12 + (target_month - latest_month)
+        forecast_steps = max(FORECAST_HORIZON, steps_needed) if steps_needed > 0 else FORECAST_HORIZON
+    elif horizon is not None:
+        forecast_steps = max(FORECAST_HORIZON, int(horizon))
+    else:
+        forecast_steps = FORECAST_HORIZON
 
     # Seed lag from the latest actual month in database
-    last_actual = (
+    initial_actual_by_category = (
         current.sort_values("month_number")
         .groupby("revenue_category")["revenue"]
         .last()
         .to_dict()
     )
+    last_actual = dict(initial_actual_by_category)
     time_index = int(latest_month - 1)
     forecasts = []
 
-    # Recursive 3-step forecasting: Step t uses prediction from step t-1 as lag_1
-    for offset in range(1, FORECAST_HORIZON + 1):
+    # Recursive step forecasting: Step t uses prediction from step t-1 as lag_1
+    for offset in range(1, forecast_steps + 1):
         forecast_date = latest_date + pd.offsets.MonthBegin(offset)
         features = pd.DataFrame(
             {
@@ -284,12 +310,15 @@ def get_revenue_forecast(db: Session) -> dict:
         .count()
     )
 
+    first_month_name = MONTHS[min(available_current_months) - 1] if available_current_months else "January"
     latest_month_name = MONTHS[latest_month - 1] if 1 <= latest_month <= len(MONTHS) else f"Month {latest_month}"
 
     data_update_status = {
         "latest_upload_filename": latest_file_record.original_filename if latest_file_record else "N/A",
         "latest_upload_time": latest_file_record.uploaded_at.isoformat() if (latest_file_record and latest_file_record.uploaded_at) else None,
         "latest_available_month": f"{latest_month_name} {CURRENT_YEAR}",
+        "first_available_month": first_month_name,
+        "month_range": f"{first_month_name} to {latest_month_name}",
         "num_current_year_files": num_cy_files,
         "auto_retraining_status": "Enabled & Active (Triggered upon new TB processing)",
     }
@@ -297,14 +326,20 @@ def get_revenue_forecast(db: Session) -> dict:
     eval_info = artifact.get("evaluation", {})
     meta_info = artifact.get("metadata", {})
 
-    training_period_str = meta_json.get("training_period") or meta_info.get("training_period") or "January 2026 – June 2026"
+    training_period_str = meta_json.get("training_period") or meta_info.get("training_period") or f"{first_month_name} {CURRENT_YEAR} – {latest_month_name} {CURRENT_YEAR}"
     last_trained_str = meta_json.get("last_trained") or meta_info.get("last_trained") or datetime.datetime.utcnow().isoformat() + "Z"
+
+    selected_period_str = (
+        f"{MONTHS[target_month - 1]} {target_year}"
+        if (target_month is not None and target_year is not None and 1 <= target_month <= 12)
+        else None
+    )
 
     return {
         "forecast_label": FORECAST_LABEL,
         "forecasts": forecasts,
         "comparison": comparison,
-        "latest_actual_by_category": {cat: round(float(val), 6) for cat, val in last_actual.items()},
+        "latest_actual_by_category": {cat: round(float(val), 6) for cat, val in initial_actual_by_category.items()},
         "model_information": {
             "model": meta_json.get("model_name", meta_info.get("model_name", "RandomForestRegressor")),
             "status": meta_json.get("status", "Active"),
@@ -320,4 +355,6 @@ def get_revenue_forecast(db: Session) -> dict:
             "evaluation_note": f"R2 of {meta_json.get('r2', eval_info.get('r2', 0.9975))} on holdout validation.",
         },
         "data_update_status": data_update_status,
+        "selected_period": selected_period_str,
+        "forecast_horizon_steps": forecast_steps,
     }
