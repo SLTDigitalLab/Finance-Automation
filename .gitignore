@@ -18,3 +18,19 @@ finance_automation/frontend/build/
 .DS_Store
 Thumbs.db
 nul
+
+# Local databases
+*.db
+*.db-journal
+*.sqlite
+
+# Local database backups
+finance_backup*.db
+finance_before_period_fix.db
+
+# Forecasting model binaries & backups
+*.joblib
+finance_automation/backend/ai/models/backups/
+
+# Temporary local scripts
+finance_automation/backend/fix_previous_period.py

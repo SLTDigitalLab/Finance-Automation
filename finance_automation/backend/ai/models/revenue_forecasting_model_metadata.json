@@ -1,0 +1,38 @@
+{
+  "status": "Active",
+  "model_name": "RandomForestRegressor",
+  "data_source": "Real Current-Year TB Data",
+  "current_year": 2026,
+  "training_period": "January 2026 \u2013 July 2026",
+  "training_samples": 70,
+  "testing_samples": 14,
+  "mae": 8.0869,
+  "rmse": 13.9158,
+  "r2": 0.9993,
+  "last_trained": "2026-08-27T13:08:11.296471Z",
+  "features_used": [
+    "revenue_category",
+    "month_number",
+    "time_index",
+    "current_revenue_lag_1"
+  ],
+  "source_file_ids": [
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19
+  ],
+  "source_files": [
+    "Jan -26 Revenue.txt",
+    "Feb-26 Revenue.txt",
+    "Mar-26 Revenue.txt",
+    "Apr-26 Revenue.txt",
+    "May-26 Revenue.txt",
+    "Jun-26 Revenue.txt",
+    "July 2026 TB PTD - Shared Revenue only (Synthetic).txt"
+  ],
+  "duration_seconds": 2.07
+}

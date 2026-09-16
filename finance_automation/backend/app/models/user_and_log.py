@@ -1,5 +1,15 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from app.database.connection import Base
 
 
@@ -66,3 +76,99 @@ class ReportJob(Base):
     updated_at = Column(
         DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
     )
+
+
+class UploadedFinanceFile(Base):
+    __tablename__ = "uploaded_finance_files"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    file_type = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_hash = Column(String, nullable=False, unique=True, index=True)
+    period_month = Column(String, nullable=True)
+    period_year = Column(Integer, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    status = Column(String, default="uploaded")
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+
+
+class FinancialTBRecord(Base):
+    __tablename__ = "financial_tb_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "uploaded_file_id",
+            "row_index",
+            name="uq_financial_tb_records_uploaded_file_row",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=False, index=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    period_month = Column(String, nullable=True)
+    period_year = Column(Integer, nullable=True)
+    gl_code = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    flexfield = Column(String, nullable=True)
+    cost_center = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    business_line = Column(String, nullable=True)
+    product = Column(String, nullable=True)
+    account = Column(String, nullable=True)
+    technology = Column(String, nullable=True)
+    intercompany = Column(String, nullable=True)
+    project = Column(String, nullable=True)
+    beginning_balance = Column(Float, default=0.0)
+    period_activity = Column(Float, default=0.0)
+    ending_balance = Column(Float, default=0.0)
+    revenue_category = Column(String, nullable=True)
+    sub_category = Column(String, nullable=True)
+    row_index = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class AnomalyDetectionResult(Base):
+    """
+    Stores AI-detected anomalies in FinancialTBRecord rows.
+
+    IMPORTANT: These records represent statistical outliers and suspicious
+    patterns identified by AI models for human review by the Finance Department.
+    They do NOT constitute confirmed fraud classifications.
+    """
+    __tablename__ = "anomaly_detection_results"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    tb_record_id = Column(
+        Integer, ForeignKey("financial_tb_records.id"), nullable=True, index=True
+    )
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=True, index=True
+    )
+    period_month = Column(String, nullable=True, index=True)
+    period_year = Column(Integer, nullable=True, index=True)
+    gl_code = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    flexfield = Column(String, nullable=True)
+    account = Column(String, nullable=True)
+    cost_center = Column(String, nullable=True)
+    business_line = Column(String, nullable=True)
+    revenue_category = Column(String, nullable=True, index=True)
+    sub_category = Column(String, nullable=True)
+    period_activity = Column(Float, default=0.0)
+    beginning_balance = Column(Float, default=0.0)
+    ending_balance = Column(Float, default=0.0)
+    anomaly_score = Column(Float, default=0.0)
+    isolation_score = Column(Float, default=0.0)
+    z_score = Column(Float, default=0.0)
+    risk_level = Column(String, nullable=True, index=True)  # "HIGH", "MEDIUM", "LOW"
+    risk_reason = Column(Text, nullable=True)
+    detection_method = Column(String, default="hybrid_isolation_zscore")
+    model_version = Column(String, default="1.0.0")
+    analysis_run_id = Column(String, nullable=True, index=True)
+    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+

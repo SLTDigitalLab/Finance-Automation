@@ -38,6 +38,20 @@ function getAuthHeaders(headers = {}) {
   return headers;
 }
 
+export async function getRevenueForecast(params = {}) {
+  const queryParts = [];
+  if (params.target_month != null) queryParts.push(`target_month=${encodeURIComponent(params.target_month)}`);
+  if (params.target_year != null) queryParts.push(`target_year=${encodeURIComponent(params.target_year)}`);
+  if (params.target_period) queryParts.push(`target_period=${encodeURIComponent(params.target_period)}`);
+  if (params.horizon != null) queryParts.push(`horizon=${encodeURIComponent(params.horizon)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/forecast/revenue${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load revenue forecast");
+}
+
 async function parseResponseError(response, defaultMessage = "Request failed") {
   let errorMsg = `${defaultMessage} (${response.status})`;
   try {
@@ -600,3 +614,68 @@ export async function getSystemAuditLogs(params = {}) {
   }
   return response.json();
 }
+
+// ANOMALY & FRAUD DETECTION SERVICES
+export async function getAnomalySummary(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+  if (params.period_month) queryParts.push(`period_month=${encodeURIComponent(params.period_month)}`);
+  if (params.revenue_category) queryParts.push(`revenue_category=${encodeURIComponent(params.revenue_category)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/summary${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly summary");
+}
+
+export async function getAnomalyMatrix(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/matrix${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load category x month anomaly matrix");
+}
+
+export async function getAnomalyResults(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+  if (params.risk_level) queryParts.push(`risk_level=${encodeURIComponent(params.risk_level)}`);
+  if (params.period_month) queryParts.push(`period_month=${encodeURIComponent(params.period_month)}`);
+  if (params.revenue_category) queryParts.push(`revenue_category=${encodeURIComponent(params.revenue_category)}`);
+  if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
+  if (params.skip != null) queryParts.push(`skip=${params.skip}`);
+  if (params.limit != null) queryParts.push(`limit=${params.limit}`);
+  if (params.sort_by) queryParts.push(`sort_by=${encodeURIComponent(params.sort_by)}`);
+  if (params.sort_order) queryParts.push(`sort_order=${encodeURIComponent(params.sort_order)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/results${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly records");
+}
+
+export async function getAnomalyFilterOptions() {
+  const response = await fetch(`${API_BASE}/anomaly/filters`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly filter options");
+}
+
+export async function triggerAnomalyAnalysis() {
+  const response = await fetch(`${API_BASE}/anomaly/analyze`, {
+    method: "POST",
+    headers: getAuthHeaders({
+      "Content-Type": "application/json",
+    }),
+  });
+  return safeJsonResponse(response, "Failed to trigger anomaly detection analysis");
+}
+

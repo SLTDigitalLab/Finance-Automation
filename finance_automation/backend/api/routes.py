@@ -1,16 +1,24 @@
 from importlib.resources import files
+import datetime
+import hashlib
 import os
 import json
 import time
 import uuid
 import shutil
 from pathlib import Path
+import pandas as pd
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends, Request, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.database.connection import get_db, SessionLocal
 from app.auth.jwt_handler import get_admin_user, get_current_active_user
-from app.models.user_and_log import User, ReportJob
+from app.models.user_and_log import (
+    FinancialTBRecord,
+    ReportJob,
+    UploadedFinanceFile,
+    User,
+)
 from app.services.audit_logger import log_audit
 from utils.logger import logger
 from config import settings
@@ -37,6 +45,153 @@ router = APIRouter(prefix="/api", tags=["finance"])
 uploaded_files_store: dict = {}
 report_jobs: dict = {}
 unmapped_jobs: dict = {}
+
+
+def _sha256_file(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _persist_tb_data(
+    db: Session,
+    session_id: str,
+    user_id: int,
+    current_report_month: str,
+    current_report_year: int,
+    previous_report_month: str,
+    previous_report_year: int,
+    file_paths: dict,
+    current_tb_df,
+    previous_tb_df,
+):
+    """Persist mapped TB rows without changing the DataFrames used for reporting."""
+    file_data = (
+        ("tb_current", current_tb_df),
+        ("tb_previous", previous_tb_df),
+    )
+    new_current_tb_processed = False
+    try:
+        for file_type, tb_df in file_data:
+            period_month, period_year = (
+                (current_report_month, current_report_year)
+                if file_type == "tb_current"
+                else (previous_report_month, previous_report_year)
+            )
+            file_path = Path(file_paths[file_type])
+            file_hash = _sha256_file(file_path)
+            duplicate_file = (
+                db.query(UploadedFinanceFile)
+                .filter(UploadedFinanceFile.file_hash == file_hash)
+                .first()
+            )
+            if duplicate_file is not None:
+                logger.info(
+                    "Exact duplicate TB file already exists: "
+                    f"hash={file_hash}, file_type={duplicate_file.file_type}, "
+                    f"uploaded_file_id={duplicate_file.id}"
+                )
+                continue
+
+            uploaded_file = (
+                db.query(UploadedFinanceFile)
+                .filter(
+                    UploadedFinanceFile.session_id == session_id,
+                    UploadedFinanceFile.file_type == file_type,
+                )
+                .first()
+            )
+
+            if uploaded_file is None:
+                original_filename = file_path.name.split("__", 1)[-1]
+                uploaded_file = UploadedFinanceFile(
+                    session_id=session_id,
+                    user_id=user_id,
+                    file_type=file_type,
+                    original_filename=original_filename,
+                    file_hash=file_hash,
+                    period_month=period_month,
+                    period_year=period_year,
+                    file_size=file_path.stat().st_size if file_path.exists() else None,
+                )
+                db.add(uploaded_file)
+                db.flush()
+
+            existing_row_indexes = {
+                row_index
+                for (row_index,) in db.query(FinancialTBRecord.row_index)
+                .filter(FinancialTBRecord.uploaded_file_id == uploaded_file.id)
+                .all()
+            }
+
+            fields = (
+                "gl_code",
+                "description",
+                "flexfield",
+                "cost_center",
+                "location",
+                "business_line",
+                "product",
+                "account",
+                "technology",
+                "intercompany",
+                "project",
+                "beginning_balance",
+                "period_activity",
+                "ending_balance",
+                "revenue_category",
+                "sub_category",
+            )
+            for row_index, row in enumerate(tb_df.to_dict("records"), start=1):
+                if row_index in existing_row_indexes:
+                    continue
+                values = {
+                    field: row.get(field) if field in row else None for field in fields
+                }
+                values = {
+                    field: None if pd.isna(value) else value
+                    for field, value in values.items()
+                }
+                db.add(
+                    FinancialTBRecord(
+                        uploaded_file_id=uploaded_file.id,
+                        user_id=user_id,
+                        period_month=period_month,
+                        period_year=period_year,
+                        row_index=row_index,
+                        **values,
+                    )
+                )
+
+            db.flush()
+            uploaded_file.status = "processed"
+            uploaded_file.processed_at = datetime.datetime.utcnow()
+            if file_type == "tb_current":
+                new_current_tb_processed = True
+
+        db.commit()
+
+        # Trigger background forecasting model retraining ONLY if a new valid current-year tb_current file was processed
+        if new_current_tb_processed:
+            try:
+                from app.services.revenue_forecasting_trainer import trigger_background_retraining
+                trigger_background_retraining()
+                logger.info(f"Triggered automatic model retraining for new current-year TB file (session={session_id})")
+            except Exception as e:
+                logger.warning(f"Could not trigger background model retraining: {e}")
+
+            try:
+                from app.services.anomaly_detection_service import trigger_background_anomaly_analysis
+                trigger_background_anomaly_analysis()
+                logger.info(f"Triggered automatic anomaly detection for new current-year TB file (session={session_id})")
+            except Exception as e:
+                logger.warning(f"Could not trigger background anomaly analysis: {e}")
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to persist TB data for session {session_id}")
+        raise
 
 
 def _db_save_job(session_id: str, status: str, result: dict | None = None):
@@ -171,6 +326,9 @@ def _build_report_for_session(
             detail="Could not detect month and year from Trial Balance filename. "
             "Please ensure the filename contains a month abbreviation and year.",
         )
+    previous_report_month, previous_report_year = detect_tb_month_and_year(
+        file_paths["tb_previous"]
+    )
     logger.info(f"Report period: {report_month} {report_year}")
 
     logger.info("Loading mapping rules...")
@@ -203,6 +361,19 @@ def _build_report_for_session(
     logger.info("Mapping previous year TB rows...")
     py_tb_df = mapping_engine.map_tb_rows(py_tb_df)
     py_unmapped_df = mapping_engine.get_unmapped_report()
+
+    _persist_tb_data(
+        db=db,
+        session_id=session_id,
+        user_id=user_id,
+        current_report_month=report_month,
+        current_report_year=report_year,
+        previous_report_month=previous_report_month,
+        previous_report_year=previous_report_year,
+        file_paths=file_paths,
+        current_tb_df=cy_tb_df,
+        previous_tb_df=py_tb_df,
+    )
 
     file_paths["cy_unmapped_df"] = cy_unmapped_df
     file_paths["py_unmapped_df"] = py_unmapped_df

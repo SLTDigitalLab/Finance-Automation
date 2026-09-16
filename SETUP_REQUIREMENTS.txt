@@ -1,0 +1,810 @@
+================================================================================
+SLT FINANCE REVENUE AUTOMATION SYSTEM
+DEVELOPER SETUP, REQUIREMENTS & REVENUE FORECASTING RUNBOOK
+================================================================================
+Document Version : 1.0.0
+Target Branch    : Amaya
+Repository       : SLT Finance Automation
+Target OS        : Windows / Cross-Platform
+Suggested File   : SETUP_REQUIREMENTS.txt
+================================================================================
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1.  PROJECT OVERVIEW & ARCHITECTURE SUMMARY
+2.  WHY THE FORECASTING DASHBOARD INITIALLY FAILS ON A FRESH CLONE
+3.  SYSTEM PREREQUISITES & ENVIRONMENT REQUIREMENTS
+4.  BACKEND SETUP & PYTHON CONFIGURATION
+5.  FRONTEND SETUP & NODE.JS CONFIGURATION
+6.  DATABASE ARCHITECTURE & INITIALIZATION
+7.  REVENUE FORECASTING SYSTEM ARCHITECTURE & DATA PIPELINE
+8.  MACHINE LEARNING MODEL & ARTIFACT MANAGEMENT
+9.  REQUIRED INPUT FILES & DATA SPECIFICATIONS
+10. ENVIRONMENT VARIABLES & CONFIGURATION REFERENCE
+11. STEP-BY-STEP STARTUP PROCEDURE
+12. COMPREHENSIVE TROUBLESHOOTING GUIDE
+13. GIT SAFETY, SECURITY & IGNORED FILES
+14. END-TO-END VERIFICATION CHECKLIST
+--------------------------------------------------------------------------------
+
+
+================================================================================
+1. PROJECT OVERVIEW & ARCHITECTURE SUMMARY
+================================================================================
+
+The SLT Finance Automation Project is an enterprise web application designed to
+automate financial Trial Balance ingestion, chart-of-accounts mapping, variance
+analysis, PowerPoint executive presentation generation, and AI-driven revenue
+forecasting.
+
+Key Subsystems:
+1. React Frontend:
+   - Modern single-page application built with React 18 and Material-UI (MUI v5).
+   - Includes authentication, User Dashboard, File Upload & Processing, Admin
+     Configuration, Audit Logs, and the Revenue Forecasting Dashboard.
+   - Located at: `finance_automation/frontend`
+
+2. FastAPI Python Backend:
+   - Asynchronous RESTful API service built with FastAPI and Uvicorn.
+   - Handles file parsing, flexfield validation, rule-based mapping engine,
+     PowerPoint generation (`python-pptx`), SQLite persistence (`SQLAlchemy`),
+     JWT authentication (`python-jose`, `bcrypt`), and machine learning
+     inference (`scikit-learn`, `joblib`).
+   - Located at: `finance_automation/backend`
+
+3. SQLite Local Database:
+   - Local relational database (`finance.db`) storing user accounts, audit logs,
+     report jobs, uploaded file metadata, and granular mapped Trial Balance
+     financial records (`financial_tb_records`).
+
+4. AI Revenue Forecasting Engine:
+   - Time-series machine learning model using `RandomForestRegressor` with
+     categorical encoding and 1-month historical revenue lag features.
+   - Generates recursive 3-month forward revenue projections across all SLT
+     business categories based strictly on real processed Trial Balance records.
+
+
+================================================================================
+2. WHY THE FORECASTING DASHBOARD INITIALLY FAILS ON A FRESH CLONE
+================================================================================
+
+When a new developer clones the `Amaya` branch and runs the application, the
+Revenue Forecasting dashboard will typically show an error or blank data unless
+the following 4 specific conditions are understood and resolved:
+
+--------------------------------------------------------------------------------
+Reason 1: Missing ML Dependencies in Base requirements.txt
+--------------------------------------------------------------------------------
+- The file `finance_automation/backend/requirements.txt` contains core API and
+  data processing dependencies, but `scikit-learn` and `joblib` were omitted
+  from the base file.
+- When `revenue_forecasting_service.py` or `revenue_forecasting_trainer.py`
+  runs, Python requires `scikit-learn` and `joblib`.
+- Solution: The developer MUST explicitly install `scikit-learn` and `joblib`
+  in their Python virtual environment.
+
+--------------------------------------------------------------------------------
+Reason 2: Local Database (finance.db) is Not in GitHub
+--------------------------------------------------------------------------------
+- Real Finance Department Trial Balance data is strictly confidential.
+- The database `finance.db` is intentionally excluded from Git via `.gitignore`.
+- On a fresh clone, the local database is initially created empty. Without
+  uploaded and processed Current Year Trial Balance records, the forecasting
+  endpoint (`/api/forecast/revenue`) has no historical records to query and
+  returns HTTP 404 ("No real current-year historical revenue data is available").
+- Solution: The developer must log in and upload/process real or staging Trial
+  Balance files through the application dashboard.
+
+--------------------------------------------------------------------------------
+Reason 3: Trained ML Model Binary (*.joblib) is Ignored by Git
+--------------------------------------------------------------------------------
+- Machine learning binaries (`*.joblib`) trained on confidential data are
+  ignored by Git (`.gitignore` rules: `*.joblib` and `ai/models/backups/`).
+- If no `.joblib` model artifact exists in `finance_automation/backend/ai/models/`,
+  the forecasting service returns HTTP 503 ("The revenue forecasting model
+  artifact is unavailable").
+- Solution: The application automatically triggers model retraining in the
+  background whenever a valid Current Year Trial Balance file is uploaded and
+  processed. Alternatively, the model trainer can be invoked once data is in the DB.
+
+--------------------------------------------------------------------------------
+Reason 4: Authentication & Protected Route Access
+--------------------------------------------------------------------------------
+- The forecasting dashboard (`/forecasting`) and forecasting API (`/api/forecast/revenue`)
+  require a valid JWT bearer token.
+- Attempting to access the forecasting page directly without logging in will
+  redirect to `/login` or result in HTTP 401 Unauthorized.
+- Solution: Log in using the seeded default administrator account.
+
+
+================================================================================
+3. SYSTEM PREREQUISITES & ENVIRONMENT REQUIREMENTS
+================================================================================
+
+Ensure the host machine has the following runtimes installed:
+
+--------------------------------------------------------------------------------
+Python Runtime
+--------------------------------------------------------------------------------
+- Recommended Version : Python 3.10.x, 3.11.x, 3.12.x, or 3.13.x (64-bit)
+- Verification Command:
+    python --version
+  (Must return Python 3.10 or higher)
+
+--------------------------------------------------------------------------------
+Node.js & Package Manager
+--------------------------------------------------------------------------------
+- Recommended Version : Node.js 18.x LTS, 20.x LTS, or 22.x LTS
+- Package Manager     : npm 9.x, 10.x, or 11.x
+- Verification Commands:
+    node --version
+    npm --version
+
+--------------------------------------------------------------------------------
+Operating System Support
+--------------------------------------------------------------------------------
+- Windows 10 / Windows 11 / Windows Server (Native PowerShell or CMD)
+- Linux / macOS (Commands provided for both Windows and Unix)
+
+
+================================================================================
+4. BACKEND SETUP & PYTHON CONFIGURATION
+================================================================================
+
+Repository Path for Backend: `finance_automation/backend`
+
+--------------------------------------------------------------------------------
+Step 4.1: Create Python Virtual Environment
+--------------------------------------------------------------------------------
+Open a terminal in the project root (`Finance-Automation`) or navigate to the
+backend directory.
+
+On Windows (Command Prompt / PowerShell):
+    cd e:\Finance-Automation\finance_automation\backend
+    python -m venv .venv
+
+On macOS / Linux:
+    cd finance_automation/backend
+    python3 -m venv .venv
+
+--------------------------------------------------------------------------------
+Step 4.2: Activate Virtual Environment
+--------------------------------------------------------------------------------
+On Windows (PowerShell):
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
+    .\.venv\Scripts\Activate.ps1
+
+On Windows (Command Prompt):
+    .\.venv\Scripts\activate.bat
+
+On macOS / Linux (bash/zsh):
+    source .venv/bin/activate
+
+--------------------------------------------------------------------------------
+Step 4.3: Install Backend Dependencies
+--------------------------------------------------------------------------------
+Upgrade pip first:
+    python -m pip install --upgrade pip
+
+Install dependencies from `requirements.txt`:
+    pip install -r requirements.txt
+
+Install the required Machine Learning packages for Revenue Forecasting:
+    pip install scikit-learn joblib
+
+(Optional development packages: `pip install python-dotenv ipykernel`)
+
+--------------------------------------------------------------------------------
+Step 4.4: List of Backend Dependencies Explained
+--------------------------------------------------------------------------------
+From requirements.txt:
+  - fastapi>=0.104.0             : High-performance async web API framework
+  - uvicorn>=0.24.0              : ASGI web server for FastAPI
+  - python-multipart>=0.0.6      : Form data and file upload support
+  - pandas>=2.0.0                : Financial data manipulation and aggregation
+  - numpy>=1.24.0                : High-performance numerical computations
+  - openpyxl>=3.1.0              : Reading/writing Excel (.xlsx) workbooks
+  - python-pptx>=0.6.20          : Automated PowerPoint (.pptx) generation
+  - pydantic>=2.0.0              : Schema validation and typing
+  - pydantic-settings>=2.0.0     : Environment variable management
+  - aiofiles>=23.0.0             : Asynchronous file I/O operations
+  - sqlalchemy>=2.0.0            : Object Relational Mapper for SQLite
+  - python-jose[cryptography]    : JWT token creation, encoding, and verification
+  - bcrypt>=4.0.0                : Secure password hashing
+  - email-validator>=2.0.0       : Email validation for user accounts
+  - PyJWT[crypto]>=2.8.0         : JSON Web Token support
+  - requests>=2.31.0             : HTTP client
+  - httpx>=0.27.0                : Asynchronous HTTP client for Microsoft OAuth
+  - cryptography>=42.0.0         : Encryption and Fernet key management
+
+Required Additional ML Dependencies:
+  - scikit-learn                 : Machine learning pipeline & RandomForestRegressor
+  - joblib                       : Model serialization, persistence, and loading
+
+--------------------------------------------------------------------------------
+Step 4.5: Verify Python Environment
+--------------------------------------------------------------------------------
+Run this one-line Python command to ensure all required modules import cleanly:
+
+    python -c "import fastapi, uvicorn, pandas, numpy, openpyxl, pptx, sqlalchemy, sklearn, joblib, jose, bcrypt; print('SUCCESS: All backend & ML dependencies are installed properly!')"
+
+--------------------------------------------------------------------------------
+Step 4.6: Start FastAPI Backend Server
+--------------------------------------------------------------------------------
+From directory `finance_automation/backend` (with `.venv` activated):
+
+    uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+Expected Console Output:
+    INFO:     Started server process
+    INFO:     Waiting for application startup.
+    INFO:     Finance Revenue Automation v1.0.0 starting up
+    INFO:     Initializing database tables...
+    INFO:     Admin seeded successfully: admin@finance.com / adminpassword
+    INFO:     Application startup complete.
+    INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+
+Verify API is running:
+- Interactive Swagger UI : http://127.0.0.1:8000/docs
+- Alternative ReDoc UI   : http://127.0.0.1:8000/redoc
+
+
+================================================================================
+5. FRONTEND SETUP & NODE.JS CONFIGURATION
+================================================================================
+
+Repository Path for Frontend: `finance_automation/frontend`
+
+--------------------------------------------------------------------------------
+Step 5.1: Navigate to Frontend Directory
+--------------------------------------------------------------------------------
+Open a second terminal window:
+
+    cd e:\Finance-Automation\finance_automation\frontend
+
+--------------------------------------------------------------------------------
+Step 5.2: Install Frontend Dependencies
+--------------------------------------------------------------------------------
+Run npm install:
+
+    npm install
+
+Installed Frontend Dependencies (from package.json):
+  - react (^18.2.0)
+  - react-dom (^18.2.0)
+  - react-router-dom (^6.30.3)
+  - @mui/material (^5.14.17)
+  - @mui/icons-material (^5.14.16)
+  - @emotion/react (^11.11.1)
+  - @emotion/styled (^11.11.0)
+  - axios (^1.18.1)
+  - react-scripts (5.0.1)
+  - tailwindcss (^3.4.19)
+  - postcss (^8.5.19)
+  - autoprefixer (^10.5.4)
+
+--------------------------------------------------------------------------------
+Step 5.3: Frontend Proxy & Routing Configuration
+--------------------------------------------------------------------------------
+- The frontend `package.json` contains `"proxy": "http://localhost:8000"`.
+- All fetch calls to `/api/*` are automatically forwarded by webpack dev server
+  to the FastAPI backend running on port 8000.
+- No CORS configuration changes are required for standard local development.
+
+--------------------------------------------------------------------------------
+Step 5.4: Start Frontend Development Server
+--------------------------------------------------------------------------------
+From `finance_automation/frontend`:
+
+    npm run dev
+    (or: npm start)
+
+Expected Output:
+    Compiled successfully!
+    You can now view finance-revenue-automation in the browser.
+      Local:            http://localhost:3000
+
+Expected Frontend URL:
+    http://localhost:3000
+
+
+================================================================================
+6. DATABASE ARCHITECTURE & INITIALIZATION
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 Local SQLite Database (finance.db)
+--------------------------------------------------------------------------------
+- File Location : `finance_automation/backend/finance.db`
+- Engine URL    : `sqlite:///./finance.db` (configured in `app/database/connection.py`)
+
+--------------------------------------------------------------------------------
+6.2 Why the Database is NOT in GitHub
+--------------------------------------------------------------------------------
+- The real production database contains sensitive SLT corporate general ledger
+  records, revenue breakdowns, and account balances.
+- Git ignores `*.db`, `*.sqlite`, `*.db-journal`, and `finance_backup*.db`.
+- Each developer must maintain an independent local SQLite database on their
+  machine.
+
+--------------------------------------------------------------------------------
+6.3 Automatic Database Initialization & Schema Creation
+--------------------------------------------------------------------------------
+The application supports 100% AUTOMATIC database initialization on startup.
+When `uvicorn main:app` starts:
+1. `startup_event()` executes in `main.py`.
+2. `Base.metadata.create_all(bind=engine)` executes.
+3. The following SQLite tables are created automatically if they do not exist:
+
+   Table: users
+   - Columns: id, full_name, email, password_hash, auth_provider, microsoft_id,
+              service_number, role, status, is_active, created_by, approved_by,
+              approved_at, created_at, updated_at
+
+   Table: audit_logs
+   - Columns: id, user_id, user_name, action, module, description, ip_address,
+              user_agent, created_at
+
+   Table: password_reset_otps
+   - Columns: id, user_id, email, otp_hash, expires_at, attempts, is_used, created_at
+
+   Table: report_jobs
+   - Columns: id, session_id, status, result_json, created_at, updated_at
+
+   Table: uploaded_finance_files
+   - Columns: id, session_id, user_id, file_type, original_filename, file_hash,
+              period_month, period_year, file_size, status, uploaded_at, processed_at
+
+   Table: financial_tb_records
+   - Columns: id, uploaded_file_id, user_id, period_month, period_year, gl_code,
+              description, flexfield, cost_center, location, business_line,
+              product, account, technology, intercompany, project,
+              beginning_balance, period_activity, ending_balance,
+              revenue_category, sub_category, row_index, created_at
+
+--------------------------------------------------------------------------------
+6.4 Automatic Seed / Default Administrator Account
+--------------------------------------------------------------------------------
+On backend startup, the system checks if an Admin user exists. If not found, it
+automatically seeds the following default administrator credentials:
+
+  - Email    : admin@finance.com
+  - Password : adminpassword
+  - Role     : Admin
+  - Status   : Approved
+  - Is Active: True
+
+The developer does NOT need to manually insert SQL records or run migration scripts.
+The database and admin account are ready immediately upon first backend launch.
+
+
+================================================================================
+7. REVENUE FORECASTING SYSTEM ARCHITECTURE & DATA PIPELINE
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 High-Level Data Flow
+--------------------------------------------------------------------------------
+
+  [ Trial Balance Ingestion ]
+      - Current Year TB Files (.txt / .xlsx) e.g., Jan–Jun 2026
+      - Previous Year TB Files (.txt / .xlsx) e.g., Jan–Jun 2025
+      - Revenue Budget Workbook (.xlsx) & Mapping Rules (.xlsx)
+               │
+               ▼
+  [ Parsing & Chart of Accounts Mapping ]
+      - File reader extracts flexfield segments (CC.LOC.BL.PROD.ACCT.TECH.IC.PROJ)
+      - MappingEngine maps flexfield combinations into SLT revenue categories
+               │
+               ▼
+  [ Database Persistence (finance.db) ]
+      - Mapped records saved to `uploaded_finance_files` and `financial_tb_records`
+      - Stores period_year, period_month, revenue_category, and period_activity
+               │
+               ▼
+  [ Model Training / Retraining Trigger ]
+      - Automatically triggered upon processing new current-year TB file
+      - Aggregates monthly revenue: `revenue = -sum(period_activity) / 1,000,000`
+      - Computes time index and 1-month lag (`current_revenue_lag_1`)
+      - Trains `RandomForestRegressor` with OneHotEncoder & SimpleImputer
+      - Evaluates model (MAE, RMSE, R²) and promotes artifact
+               │
+               ▼
+  [ ML Model Artifacts ]
+      - `ai/models/revenue_forecasting_model.joblib`
+      - `ai/models/revenue_forecasting_model_metadata.json`
+               │
+               ▼
+  [ Forecasting Service & API Endpoint ]
+      - Service: `revenue_forecasting_service.py`
+      - API: `GET /api/forecast/revenue` (requires JWT token)
+      - Predicts 3-month forward horizon recursively (t+1, t+2, t+3)
+               │
+               ▼
+  [ React Revenue Forecasting Dashboard ]
+      - Route: `http://localhost:3000/forecasting`
+      - Renders actual vs forecast charts, category cards, metric chips,
+        holdout R² accuracy score, YoY comparison tables, and export options.
+
+--------------------------------------------------------------------------------
+7.2 Mathematical & Feature Specifications
+--------------------------------------------------------------------------------
+- Revenue Sign Convention:
+    In accounting ledgers, credit balances (revenue) appear negative in
+    `period_activity`. The system converts this to positive revenue in Millions LKR:
+    `Revenue (Mn LKR) = - (Period Activity) / 1,000,000.0`
+
+- Model Features:
+    1. `revenue_category`      : Categorical (One-Hot Encoded)
+    2. `month_number`          : Numeric (1 to 12)
+    3. `time_index`            : Numeric (0-indexed chronological month tracker)
+    4. `current_revenue_lag_1` : Numeric (Prior month revenue for the category)
+
+- Recursive Inference Horizon:
+    For horizon offset t = 1 to 3:
+      - Step 1 (t+1): Uses the latest actual month in database as `lag_1`.
+      - Step 2 (t+2): Uses Step 1's forecasted revenue as `lag_1`.
+      - Step 3 (t+3): Uses Step 2's forecasted revenue as `lag_1`.
+
+
+================================================================================
+8. MACHINE LEARNING MODEL & ARTIFACT MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 Storage Location
+--------------------------------------------------------------------------------
+All model files reside in:
+    `finance_automation/backend/ai/models/`
+
+Files generated:
+  - `revenue_forecasting_model.joblib`         : Active model pipeline artifact
+  - `revenue_forecasting_model_metadata.json`   : Model metadata, metrics, timestamps
+  - `backups/revenue_forecasting_model_backup_*.joblib` : Historical version backups
+
+--------------------------------------------------------------------------------
+8.2 Git Status of Model Binaries
+--------------------------------------------------------------------------------
+- Git rules ignore `*.joblib` and `ai/models/backups/`.
+- DO NOT commit `.joblib` files to GitHub.
+- DO NOT remove `*.joblib` from `.gitignore`.
+
+--------------------------------------------------------------------------------
+8.3 Automatic vs Manual Model Generation
+--------------------------------------------------------------------------------
+- Automatic Trigger: Whenever a user uploads and processes a Current Year Trial
+  Balance via `/api/upload` and `/api/generate`, `_persist_tb_data()` spawns a
+  daemon background thread (`trigger_background_retraining()`) that trains,
+  evaluates, and updates `revenue_forecasting_model.joblib`.
+
+- Manual Trigger: If a developer already has records populated in `finance.db`
+  and wishes to retrain manually, they can execute:
+    cd finance_automation/backend
+    python -c "from app.services.revenue_forecasting_trainer import train_and_validate_model; print(train_and_validate_model())"
+
+- Verification: Check if `revenue_forecasting_model.joblib` exists in
+  `finance_automation/backend/ai/models/`.
+
+
+================================================================================
+9. REQUIRED INPUT FILES & DATA SPECIFICATIONS
+================================================================================
+
+To run reports and train the forecasting model, the developer needs sample or
+actual Trial Balance files.
+
+--------------------------------------------------------------------------------
+File 1: Current Year Trial Balance (tb_current) [REQUIRED]
+--------------------------------------------------------------------------------
+- Purpose           : Ingests current-year monthly financial balances and activity.
+                      Powers revenue calculations, mapping, and ML forecasting.
+- Allowed Formats   : `.txt`, `.xlsx`, `.xls`
+- Upload Destination: Dashboard Upload Form -> "Current Year Trial Balance"
+- Required Naming   : Must contain a recognized month name/abbreviation and year
+                      (e.g., `Jan -26 Revenue.txt`, `June 2026 TB.xlsx`, `Jun-26.txt`).
+- Expected Content  :
+    * Segment Flexfield with dot delimiters: `CC.LOC.BL.PROD.ACCT.TECH.IC.PROJ`
+    * Opening / Beginning Balance
+    * Period Activity (Net monthly activity)
+    * Closing / Ending Balance
+- For ML Forecasting: At least 2 consecutive months of current-year data (e.g.,
+                      Jan and Feb, or Jan through Jun 2026) are required to build
+                      lag features.
+
+--------------------------------------------------------------------------------
+File 2: Previous Year Trial Balance (tb_previous) [REQUIRED FOR FULL REPORT]
+--------------------------------------------------------------------------------
+- Purpose           : Provides prior year actuals for Year-over-Year (YoY)
+                      variance comparison in reports and dashboards.
+- Allowed Formats   : `.txt`, `.xlsx`, `.xls`
+- Upload Destination: Dashboard Upload Form -> "Previous Year Trial Balance"
+- Required Naming   : Must contain previous year (e.g., `June 2025 TB.xlsx`, `Jun-25.txt`).
+- Expected Content  : Same flexfield structure and balances as Current Year TB.
+
+--------------------------------------------------------------------------------
+File 3: Revenue Budget Workbook (budget) [OPTIONAL PER UPLOAD IF DEFAULT EXISTS]
+--------------------------------------------------------------------------------
+- Purpose           : Monthly and YTD revenue budget targets.
+- Allowed Formats   : `.xlsx`, `.xls`
+- Upload Destination: Dashboard Upload Form (or Admin -> Upload Default)
+- Default Location  : `finance_automation/backend/templates/defaults/default_budget.xlsx`
+- Expected Structure: Must contain a sheet named `FRM` with columns for all 12 months.
+
+--------------------------------------------------------------------------------
+File 4: Mapping Rules Workbook (mapping) [OPTIONAL PER UPLOAD IF DEFAULT EXISTS]
+--------------------------------------------------------------------------------
+- Purpose           : Chart of Accounts mapping rules from 9 flexfield segments
+                      to executive presentation revenue categories.
+- Allowed Formats   : `.xlsx`, `.xls`
+- Upload Destination: Dashboard Upload Form (or Admin -> Upload Default)
+- Default Location  : `finance_automation/backend/templates/defaults/default_mapping.xlsx`
+- Expected Structure: Rules mapping Cost Center, Product, Account, Tech, Business Line ranges.
+
+
+================================================================================
+10. ENVIRONMENT VARIABLES & CONFIGURATION REFERENCE
+================================================================================
+
+Configuration is managed via Pydantic Settings in `backend/config.py`.
+Variables can be defined in a `.env` file inside `finance_automation/backend/.env`
+or passed as environment variables with the `FINANCE_` prefix.
+
+--------------------------------------------------------------------------------
+Backend Environment Variables (config.py)
+--------------------------------------------------------------------------------
+
+Variable Name             | Default Value                   | Description
+--------------------------+---------------------------------+----------------------------------------
+FINANCE_DEBUG             | True                            | Enables debug logging & reload
+FINANCE_APP_NAME          | "Finance Revenue Automation"    | Application title
+FINANCE_APP_VERSION       | "1.0.0"                         | API version
+FINANCE_MAX_FILE_SIZE_MB  | 50                              | Maximum upload file size limit
+FINANCE_TB_TO_MN_DIVISOR  | 1000000                         | Divisor to convert ledger units to Mn LKR
+FINANCE_STATE_ENCRYPTION_KEY | ""                           | 32-byte Fernet key for Microsoft OAuth
+                          |                                 | (If blank, auto-generates ephemeral key)
+FINANCE_EMAIL_USER        | ""                              | SMTP username for password reset OTP
+FINANCE_EMAIL_PASS        | ""                              | SMTP app password for password reset OTP
+FINANCE_EMAIL_HOST        | "smtp.gmail.com"                | SMTP server host
+FINANCE_EMAIL_PORT        | 465                             | SMTP SSL port
+FINANCE_PASSWORD_RESET_OTP_EXPIRE_MINUTES | 10              | OTP expiry duration in minutes
+FINANCE_AZURE_CLIENT_ID   | ""                              | Azure / Entra App Registration Client ID
+FINANCE_AZURE_TENANT_ID   | ""                              | Azure / Entra Directory (Tenant) ID
+FINANCE_MICROSOFT_CLIENT_SECRET | ""                        | Azure / Entra Client Secret
+FINANCE_MICROSOFT_REDIRECT_URI | "http://localhost:3000/auth/callback" | OAuth redirect URI
+
+Sample `.env` file template for `finance_automation/backend/.env`:
+--------------------------------------------------------------------------------
+FINANCE_DEBUG=true
+FINANCE_MAX_FILE_SIZE_MB=50
+# Fernet key (optional - generates temporary key if empty):
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FINANCE_STATE_ENCRYPTION_KEY=YOUR_FERNET_KEY_HERE
+
+# Optional Email OTP Configuration:
+FINANCE_EMAIL_USER=YOUR_EMAIL_HERE
+FINANCE_EMAIL_PASS=YOUR_APP_PASSWORD_HERE
+
+# Optional Microsoft SSO Configuration:
+FINANCE_AZURE_CLIENT_ID=YOUR_AZURE_CLIENT_ID
+FINANCE_AZURE_TENANT_ID=YOUR_AZURE_TENANT_ID
+FINANCE_MICROSOFT_CLIENT_SECRET=YOUR_MICROSOFT_CLIENT_SECRET
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Frontend Environment Variables
+--------------------------------------------------------------------------------
+
+Variable Name                     | Default Value | Description
+----------------------------------+---------------+-------------------------------------
+REACT_APP_API_BASE_URL            | "/api"        | Base URL for backend API calls
+REACT_APP_MICROSOFT_SSO_ENABLED   | "true"        | Set to "false" to disable SSO button
+
+
+================================================================================
+11. STEP-BY-STEP STARTUP PROCEDURE
+================================================================================
+
+Follow this exact sequence to run the project on a new developer computer:
+
+STEP 1: Clone the Repository and Checkout Branch
+------------------------------------------------
+    git clone <repository-url>
+    cd Finance-Automation
+    git checkout Amaya
+
+STEP 2: Setup Backend Virtual Environment & Dependencies
+--------------------------------------------------------
+    cd finance_automation/backend
+    python -m venv .venv
+
+    # Activate virtual environment on Windows:
+    .\.venv\Scripts\activate
+
+    # Install base requirements + ML forecasting dependencies:
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    pip install scikit-learn joblib
+
+STEP 3: Start the Backend Server
+--------------------------------
+    uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+    Verify backend is running by opening: http://127.0.0.1:8000/docs
+    (Notice in console: Database tables initialized and Admin user seeded).
+
+STEP 4: Setup Frontend & Install Dependencies
+---------------------------------------------
+    Open a second terminal window:
+    cd finance_automation/frontend
+    npm install
+
+STEP 5: Start the Frontend Application
+--------------------------------------
+    npm run dev
+    (or: npm start)
+
+STEP 6: Log In to the Application
+---------------------------------
+    1. Open your browser and navigate to: http://localhost:3000
+    2. Enter the default administrator credentials:
+       - Email    : admin@finance.com
+       - Password : adminpassword
+    3. Click "Sign In".
+
+STEP 7: Upload Trial Balance Files & Populate Database
+------------------------------------------------------
+    1. On the User Dashboard (`/dashboard`), locate the Upload section.
+    2. Select:
+       - Current Year Trial Balance (e.g. `Jan -26 Revenue.txt` or `June 2026 TB.xlsx`)
+       - Previous Year Trial Balance (e.g. `June 2025 TB.xlsx`)
+       - (Optional: Budget and Mapping workbooks if not using defaults)
+    3. Click "Upload & Validate Files".
+    4. Click "Generate Report".
+    5. The backend parses the files, maps chart-of-accounts rows, populates
+       `financial_tb_records` in `finance.db`, and automatically triggers model
+       training in the background.
+
+STEP 8: Access the Revenue Forecasting Dashboard
+------------------------------------------------
+    1. In the navigation bar or side menu, click "Revenue Forecasting" (or open
+       `http://localhost:3000/forecasting`).
+    2. The frontend calls `GET /api/forecast/revenue`.
+    3. View the 3-month forward revenue forecast chart, category breakdown cards,
+       model accuracy evaluation metrics (MAE, RMSE, R²), and historical YoY comparison.
+
+
+================================================================================
+12. COMPREHENSIVE TROUBLESHOOTING GUIDE
+================================================================================
+
+--------------------------------------------------------------------------------
+Problem 1: "ModuleNotFoundError: No module named 'sklearn'" or "'joblib'"
+--------------------------------------------------------------------------------
+- Cause   : `scikit-learn` and `joblib` were not installed in the active virtual env.
+- Remedy  :
+    .\.venv\Scripts\activate
+    pip install scikit-learn joblib
+
+--------------------------------------------------------------------------------
+Problem 2: "HTTP 404: No real current-year historical revenue data is available in the database"
+--------------------------------------------------------------------------------
+- Cause   : The SQLite database `finance.db` is newly created and contains no
+            processed `tb_current` files for current year (2026).
+- Remedy  :
+    1. Log in to the application at `http://localhost:3000`.
+    2. Upload and generate a report with at least 2 consecutive monthly Current
+       Year Trial Balance files (e.g., Jan 2026 and Feb 2026, or Jan–Jun 2026).
+    3. Ensure file upload status is "processed".
+
+--------------------------------------------------------------------------------
+Problem 3: "HTTP 503: The revenue forecasting model artifact is unavailable"
+--------------------------------------------------------------------------------
+- Cause   : The file `revenue_forecasting_model.joblib` has not been generated yet
+            in `finance_automation/backend/ai/models/`.
+- Remedy  :
+    Once current-year TB records are uploaded, model retraining runs automatically.
+    You can also manually trigger training by running:
+      cd finance_automation/backend
+      python -c "from app.services.revenue_forecasting_trainer import train_and_validate_model; train_and_validate_model()"
+
+--------------------------------------------------------------------------------
+Problem 4: Frontend Shows Network Error / "Failed to fetch" / 502 Bad Gateway
+--------------------------------------------------------------------------------
+- Cause   : FastAPI backend is not running on port 8000.
+- Remedy  :
+    1. Check backend terminal. Ensure Uvicorn is active on `http://127.0.0.1:8000`.
+    2. Check `package.json` proxy is `"proxy": "http://localhost:8000"`.
+    3. Visit `http://127.0.0.1:8000/docs` in browser to confirm backend responds.
+
+--------------------------------------------------------------------------------
+Problem 5: "HTTP 401 Unauthorized" or Redirects to /login
+--------------------------------------------------------------------------------
+- Cause   : Missing or expired JWT token in browser `localStorage`.
+- Remedy  :
+    Log in with `admin@finance.com` / `adminpassword` to refresh the JWT session.
+
+--------------------------------------------------------------------------------
+Problem 6: Port 8000 or Port 3000 Already in Use
+--------------------------------------------------------------------------------
+- Cause   : A zombie Python or Node process is occupying the port.
+- Remedy (Windows PowerShell):
+    # Find process on port 8000:
+    Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Process -Force
+    # Find process on port 3000:
+    Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess | Stop-Process -Force
+
+--------------------------------------------------------------------------------
+Problem 7: Month/Year Not Detected from Trial Balance File
+--------------------------------------------------------------------------------
+- Cause   : File name does not include a recognizable month/year pattern.
+- Remedy  :
+    Name the file clearly, e.g., `Jan -26 Revenue.txt`, `Jun-26.txt`, or `June 2026 TB.xlsx`.
+
+--------------------------------------------------------------------------------
+Problem 8: "Insufficient training samples. Need at least 2 consecutive months of data"
+--------------------------------------------------------------------------------
+- Cause   : The forecasting model uses 1-month lag features (`current_revenue_lag_1`).
+            A single month of data cannot create lag pairs.
+- Remedy  :
+    Upload at least two distinct monthly files for current year (e.g., Month 1 and Month 2).
+
+
+================================================================================
+13. GIT SAFETY, SECURITY & IGNORED FILES
+================================================================================
+
+To maintain data protection compliance and repository hygiene, strictly observe
+the project's Git configuration:
+
+--------------------------------------------------------------------------------
+13.1 Files That MUST Remain Ignored by Git
+--------------------------------------------------------------------------------
+The `.gitignore` file intentionally blocks:
+  - `*.db`, `*.sqlite`, `*.db-journal`  : All SQLite database instances
+  - `finance_backup*.db`                : Local database backups
+  - `*.joblib`                          : Trained ML model binaries
+  - `finance_automation/backend/ai/models/backups/` : Model version archives
+  - `finance_automation/backend/uploads/` : Uploaded customer files
+  - `finance_automation/backend/outputs/` : Generated PowerPoint/Excel outputs
+  - `finance_automation/logs/`          : Execution logs
+  - `*.xlsx`, `*.pptx`, `*.log`         : Raw local data and exports
+  - `.env`, `.venv/`, `venv/`           : Secrets and virtual environments
+  - `node_modules/`, `build/`           : Frontend packages and build artifacts
+
+--------------------------------------------------------------------------------
+13.2 Rules for Developers
+--------------------------------------------------------------------------------
+1. DO NOT remove database or model ignore rules from `.gitignore`.
+2. DO NOT commit or push real corporate Trial Balance files (.txt, .xlsx) to GitHub.
+3. DO NOT commit `finance.db` or `.joblib` model binaries to GitHub.
+4. DO NOT commit plain-text API secrets, passwords, or encryption keys.
+
+
+================================================================================
+14. END-TO-END VERIFICATION CHECKLIST
+================================================================================
+
+Use this checklist to confirm complete system readiness:
+
+[ ] Python 3.10+ installed and verified (`python --version`)
+[ ] Node.js 18+ and npm installed and verified (`node --version`, `npm --version`)
+[ ] Python virtual environment created in `finance_automation/backend/.venv`
+[ ] Backend dependencies installed (`pip install -r requirements.txt`)
+[ ] ML packages installed (`pip install scikit-learn joblib`)
+[ ] All imports verified with Python test one-liner
+[ ] FastAPI backend running without errors (`http://127.0.0.1:8000/docs`)
+[ ] Database `finance.db` initialized automatically on startup
+[ ] Default Admin account seeded (`admin@finance.com` / `adminpassword`)
+[ ] Frontend dependencies installed (`npm install` in `finance_automation/frontend`)
+[ ] Frontend running without errors (`http://localhost:3000`)
+[ ] Admin login succeeds and JWT token stored in browser
+[ ] Current Year and Previous Year Trial Balance files uploaded and processed
+[ ] Model training automatically triggered or verified
+[ ] `revenue_forecasting_model.joblib` exists in `backend/ai/models/`
+[ ] Forecasting API returns JSON (`GET /api/forecast/revenue`)
+[ ] Revenue Forecasting Dashboard (`/forecasting`) loads and renders charts/cards
+[ ] Git status confirmed clean of `.db`, `.joblib`, `.xlsx`, and confidential files
+
+================================================================================
+End of Setup & Requirements Document
+================================================================================
