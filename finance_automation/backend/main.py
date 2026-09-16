@@ -55,34 +55,40 @@ async def startup_event():
 
         logger.info("Initializing database tables...")
 
-        # Add missing columns to existing tables (idempotent migration)
+        # 1. Create all missing tables first
+        Base.metadata.create_all(bind=engine)
+
+        # 2. Add missing columns to existing tables (safe idempotent migration)
         from sqlalchemy import text
 
         with engine.connect() as conn:
-            result = conn.execute(text("PRAGMA table_info(users)"))
-            columns = [row[1] for row in result]
-            if "auth_provider" not in columns:
-                conn.execute(
-                    text(
-                        "ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'local'"
-                    )
-                )
-                conn.commit()
-                logger.info("Added 'auth_provider' column to users table")
-            if "microsoft_id" not in columns:
-                conn.execute(
-                    text("ALTER TABLE users ADD COLUMN microsoft_id VARCHAR")
-                )
-                conn.commit()
-                logger.info("Added 'microsoft_id' column to users table")
-            if "service_number" not in columns:
-                conn.execute(
-                    text("ALTER TABLE users ADD COLUMN service_number VARCHAR")
-                )
-                conn.commit()
-                logger.info("Added 'service_number' column to users table")
-
-        Base.metadata.create_all(bind=engine)
+            table_check = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            ).fetchone()
+            if table_check:
+                result = conn.execute(text("PRAGMA table_info(users)"))
+                columns = [row[1] for row in result]
+                if columns:
+                    if "auth_provider" not in columns:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'local'"
+                            )
+                        )
+                        conn.commit()
+                        logger.info("Added 'auth_provider' column to users table")
+                    if "microsoft_id" not in columns:
+                        conn.execute(
+                            text("ALTER TABLE users ADD COLUMN microsoft_id VARCHAR")
+                        )
+                        conn.commit()
+                        logger.info("Added 'microsoft_id' column to users table")
+                    if "service_number" not in columns:
+                        conn.execute(
+                            text("ALTER TABLE users ADD COLUMN service_number VARCHAR")
+                        )
+                        conn.commit()
+                        logger.info("Added 'service_number' column to users table")
 
         db = SessionLocal()
         admin_exists = db.query(User).filter(User.role == "Admin").first()
