@@ -123,6 +123,40 @@ export async function uploadFiles(files) {
   return response.json();
 }
 
+export async function uploadPLFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/upload-pl`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "PL upload failed"));
+  }
+
+  return response.json();
+}
+
+export async function getPLRevenue(periodMonth, periodYear) {
+  const queryParts = [];
+  if (periodMonth) queryParts.push(`period_month=${encodeURIComponent(periodMonth)}`);
+  if (periodYear) queryParts.push(`period_year=${encodeURIComponent(periodYear)}`);
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+
+  const response = await fetch(`${API_BASE}/pl-revenue${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to fetch PL revenue"));
+  }
+
+  return response.json();
+}
+
 export async function generateReport(sessionId) {
   const response = await fetch(`${API_BASE}/generate?session_id=${sessionId}`, {
     method: "POST",

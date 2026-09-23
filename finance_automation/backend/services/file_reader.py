@@ -442,10 +442,12 @@ def read_previous_year_tb(tb_path: str) -> pd.DataFrame:
 
 def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
     records = []
+    flex_pattern = re.compile(
+        r"\b(\d{2}\.\d{1,5}\.\d{1,4}\.\d{1,4}\.\d{1,5}\.\d{5,7}\.\d{1,4}\.\d{1,4}\.\d{1,5})\b"
+    )
 
     with open(tb_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
-
             # Remove page-break character
             line = line.replace("\x0c", "").strip()
 
@@ -468,31 +470,40 @@ def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
             ):
                 continue
 
-            parts = re.split(r"\s{2,}", line)
-
-            if len(parts) < 5:
+            m = flex_pattern.search(line)
+            if not m:
                 continue
 
             try:
-                gl_code = parts[0].strip()
-                description = parts[1].strip()
-                flexfield = parts[2].strip()
-
-                beginning_balance = _parse_numeric(parts[3])
-                period_activity = _parse_numeric(parts[4])
-
-                if len(parts) >= 6:
-                    ending_balance = _parse_numeric(parts[5])
-                else:
-                    ending_balance = beginning_balance + period_activity
-
-                if "." not in flexfield:
-                    continue
-
+                flexfield = m.group(1)
                 segments = flexfield.split(".")
-
                 while len(segments) < 9:
                     segments.append("0")
+
+                before_flex = line[:m.start()].strip()
+                tokens = before_flex.split()
+                if tokens and tokens[0].isdigit():
+                    gl_code = tokens[0]
+                    description = " ".join(tokens[1:]).strip()
+                else:
+                    gl_code = segments[5]
+                    description = before_flex
+
+                after_flex = line[m.end():].strip()
+                num_parts = [p for p in re.split(r"\s+", after_flex) if p]
+
+                if len(num_parts) >= 3:
+                    beginning_balance = _parse_numeric(num_parts[0])
+                    period_activity = _parse_numeric(num_parts[1])
+                    ending_balance = _parse_numeric(num_parts[2])
+                elif len(num_parts) == 2:
+                    beginning_balance = _parse_numeric(num_parts[0])
+                    period_activity = _parse_numeric(num_parts[1])
+                    ending_balance = beginning_balance + period_activity
+                else:
+                    beginning_balance = 0.0
+                    period_activity = _parse_numeric(num_parts[0]) if num_parts else 0.0
+                    ending_balance = period_activity
 
                 # Filter revenue codes (400000 to 429999 inclusive)
                 code_val = gl_code if gl_code else segments[5]
@@ -509,7 +520,7 @@ def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
                         "gl_code": gl_code,
                         "description": description,
                         "flexfield": flexfield,
-                        "cost_center": segments[1],
+                        "cost_center": segments[1].zfill(4),
                         "location": segments[2],
                         "business_line": segments[3],
                         "product": segments[4],
@@ -527,11 +538,6 @@ def read_txt_trial_balance(tb_path: str) -> pd.DataFrame:
                 continue
 
     df = pd.DataFrame(records)
-    if not df.empty:
-        print(df.iloc[0][["beginning_balance",
-                      "period_activity",
-                      "ending_balance"]])
-
     logger.info(f"TXT Trial Balance loaded: {len(df)} rows")
 
     print("\n================ TXT DEBUG ================")

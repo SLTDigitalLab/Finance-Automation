@@ -48,6 +48,7 @@ async def startup_event():
         from app.models.user_and_log import (
             Base,
             FinancialTBRecord,
+            PLRevenueRecord,
             UploadedFinanceFile,
             User,
         )

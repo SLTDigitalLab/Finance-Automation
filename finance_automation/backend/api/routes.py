@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import os
 import json
+import re
 import time
 import uuid
 import shutil
@@ -15,6 +16,7 @@ from app.database.connection import get_db, SessionLocal
 from app.auth.jwt_handler import get_admin_user, get_current_active_user
 from app.models.user_and_log import (
     FinancialTBRecord,
+    PLRevenueRecord,
     ReportJob,
     UploadedFinanceFile,
     User,
@@ -22,7 +24,8 @@ from app.models.user_and_log import (
 from app.services.audit_logger import log_audit
 from utils.logger import logger
 from config import settings
-from models import UploadedFiles, ReportResponse
+from models import UploadedFiles, ReportResponse, RevenueSummary
+from services.pl_reader import read_pl_workbook
 from services.validators import (
     validate_uploaded_files,
     validate_mapping_workbook,
@@ -427,6 +430,42 @@ def _build_report_for_session(
         user_name=user_name,
     )
 
+    # Compute Mapped vs Unmapped revenue totals for Revenue Summary Table
+    divisor = getattr(settings, "TB_TO_MN_DIVISOR", 1_000_000)
+    mapped_mask = (cy_tb_df["revenue_category"] != "") & (cy_tb_df["revenue_category"].notna())
+    unmapped_mask = ~mapped_mask
+
+    mapped_month = float(-cy_tb_df[mapped_mask]["period_activity"].sum() / divisor) if mapped_mask.any() else 0.0
+    mapped_ytd = float(-cy_tb_df[mapped_mask]["ending_balance"].sum() / divisor) if mapped_mask.any() else 0.0
+
+    unmapped_month = float(-cy_tb_df[unmapped_mask]["period_activity"].sum() / divisor) if unmapped_mask.any() else 0.0
+    unmapped_ytd = float(-cy_tb_df[unmapped_mask]["ending_balance"].sum() / divisor) if unmapped_mask.any() else 0.0
+
+    # Retrieve PL Revenue reference from database for this specific period (strictly matching period)
+    pl_record = (
+        db.query(PLRevenueRecord)
+        .filter(
+            PLRevenueRecord.period_month.ilike(f"%{report_month[:3]}%"),
+            PLRevenueRecord.period_year == int(report_year),
+        )
+        .order_by(PLRevenueRecord.id.desc())
+        .first()
+    )
+
+    pl_month_rev = pl_record.month_revenue if pl_record else None
+    pl_ytd_rev = pl_record.ytd_revenue if pl_record else None
+
+    rev_summary = RevenueSummary(
+        period_month=report_month,
+        period_year=int(report_year),
+        mapped_month=round(mapped_month, 2),
+        mapped_ytd=round(mapped_ytd, 2),
+        unmapped_month=round(unmapped_month, 2),
+        unmapped_ytd=round(unmapped_ytd, 2),
+        pl_month_revenue=pl_month_rev,
+        pl_ytd_revenue=pl_ytd_rev,
+    )
+
     return ReportResponse(
         status="success",
         filename=filename,
@@ -437,6 +476,7 @@ def _build_report_for_session(
         report_year=report_year,
         message=f"Report generated for {report_month} {report_year}. "
         f"{mapped_count} records mapped, {unmapped_count} unmapped.",
+        revenue_summary=rev_summary,
     )
 
 
@@ -575,6 +615,162 @@ async def upload_files(
             "mapping": mapping.filename if mapping else Path(file_paths["mapping"]).name,
         },
         "warnings": validation.warnings,
+    }
+
+
+@router.post("/upload-pl")
+async def upload_pl_file(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    logger.info(f"User {current_user.email} is uploading PL workbook: {file.filename}")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".xlsx", ".xls"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type for PL workbook: {ext}. Allowed: .xlsx, .xls",
+        )
+
+    pl_dir = settings.UPLOAD_DIR / "pl"
+    pl_dir.mkdir(parents=True, exist_ok=True)
+
+    session_id = str(uuid.uuid4())[:8]
+    temp_save_path = pl_dir / f"temp_{session_id}_{file.filename}"
+
+    content = await file.read()
+    with open(temp_save_path, "wb") as f:
+        f.write(content)
+
+    # Validate and parse PL workbook dynamically
+    try:
+        pl_data = read_pl_workbook(temp_save_path)
+    except Exception as e:
+        if temp_save_path.exists():
+            temp_save_path.unlink(missing_ok=True)
+        logger.error(f"PL workbook parsing failed: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid PL Excel Workbook structure: {str(e)}",
+        )
+
+    file_hash = _sha256_file(temp_save_path)
+    final_filename = f"pl_{pl_data['month']}_{pl_data['year']}_{file.filename}"
+    final_save_path = pl_dir / final_filename
+
+    shutil.move(str(temp_save_path), str(final_save_path))
+
+    # Record in UploadedFinanceFile
+    uploaded_file = (
+        db.query(UploadedFinanceFile)
+        .filter(UploadedFinanceFile.file_hash == file_hash)
+        .first()
+    )
+    if uploaded_file is None:
+        uploaded_file = UploadedFinanceFile(
+            session_id=session_id,
+            user_id=current_user.id,
+            file_type="pl_revenue",
+            original_filename=file.filename,
+            file_hash=file_hash,
+            period_month=pl_data["month"],
+            period_year=pl_data["year"],
+            file_size=final_save_path.stat().st_size if final_save_path.exists() else None,
+            status="processed",
+            processed_at=datetime.datetime.utcnow(),
+        )
+        db.add(uploaded_file)
+        db.flush()
+
+    # Upsert into PLRevenueRecord
+    pl_record = (
+        db.query(PLRevenueRecord)
+        .filter(
+            PLRevenueRecord.period_month == pl_data["month"],
+            PLRevenueRecord.period_year == pl_data["year"],
+        )
+        .first()
+    )
+    if not pl_record:
+        pl_record = PLRevenueRecord(
+            uploaded_file_id=uploaded_file.id if uploaded_file else None,
+            user_id=current_user.id,
+            period_month=pl_data["month"],
+            period_year=pl_data["year"],
+            month_revenue=pl_data["month_revenue"],
+            ytd_revenue=pl_data["ytd_revenue"],
+            source_filename=file.filename,
+        )
+        db.add(pl_record)
+    else:
+        if uploaded_file:
+            pl_record.uploaded_file_id = uploaded_file.id
+        pl_record.user_id = current_user.id
+        pl_record.month_revenue = pl_data["month_revenue"]
+        pl_record.ytd_revenue = pl_data["ytd_revenue"]
+        pl_record.source_filename = file.filename
+        pl_record.created_at = datetime.datetime.utcnow()
+
+    db.commit()
+
+    log_audit(
+        db=db,
+        action="PL File Upload",
+        module="Finance",
+        description=f"Uploaded PL workbook: {file.filename}, Period: {pl_data['month']} {pl_data['year']}, Month Revenue: {pl_data['month_revenue']:,.2f}, YTD Revenue: {pl_data['ytd_revenue']:,.2f}",
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        request=request,
+    )
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "period_month": pl_data["month"],
+        "period_year": pl_data["year"],
+        "month_revenue": pl_data["month_revenue"],
+        "ytd_revenue": pl_data["ytd_revenue"],
+        "message": f"PL workbook for {pl_data['month']} {pl_data['year']} successfully uploaded and verified.",
+    }
+
+
+@router.get("/pl-revenue")
+async def get_pl_revenue(
+    period_month: str | None = Query(None),
+    period_year: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    query = db.query(PLRevenueRecord)
+    if period_month:
+        query = query.filter(PLRevenueRecord.period_month.ilike(f"%{period_month[:3]}%"))
+    if period_year:
+        query = query.filter(PLRevenueRecord.period_year == int(period_year))
+
+    if period_month or period_year:
+        record = query.order_by(PLRevenueRecord.id.desc()).first()
+    else:
+        # Default on initial dashboard load with no active report: return latest uploaded PL
+        record = db.query(PLRevenueRecord).order_by(PLRevenueRecord.id.desc()).first()
+
+    if not record:
+        return {
+            "status": "not_found",
+            "data": None,
+            "message": "No PL revenue record found for the requested period.",
+        }
+
+    return {
+        "status": "success",
+        "data": {
+            "period_month": record.period_month,
+            "period_year": record.period_year,
+            "month_revenue": record.month_revenue,
+            "ytd_revenue": record.ytd_revenue,
+            "source_filename": record.source_filename,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+        },
     }
 
 
@@ -798,6 +994,76 @@ def _get_or_compute_unmapped_dfs(session_id: str, file_paths: dict):
     return cy_unmapped, py_unmapped, report_month, report_year
 
 
+_FLEXFIELD_9SEG_REGEX = re.compile(
+    r"\b(\d{2}\.\d{1,5}\.\d{1,4}\.\d{1,4}\.\d{1,5}\.\d{5,7}\.\d{1,4}\.\d{1,4}\.\d{1,5})\b"
+)
+
+
+def _is_valid_9_segment_flexfield(val) -> bool:
+    if not val or not isinstance(val, str):
+        return False
+    parts = val.strip().split(".")
+    return len(parts) == 9 and all(p.strip().isdigit() for p in parts)
+
+
+def _resolve_row_segments(r: dict) -> dict:
+    raw_flex = str(r.get("flexfield") or "").strip()
+    raw_desc = str(r.get("description") or "").strip()
+
+    flex_str = None
+    # Priority 1: First use existing flexfield if valid 9-segment
+    if _is_valid_9_segment_flexfield(raw_flex):
+        flex_str = raw_flex
+    else:
+        # Priority 2: Extract valid 9-segment flexfield from Description if present
+        m = _FLEXFIELD_9SEG_REGEX.search(raw_desc)
+        if m:
+            flex_str = m.group(1)
+
+    clean_desc = raw_desc
+    if flex_str:
+        if flex_str in clean_desc:
+            clean_desc = clean_desc.replace(flex_str, "").strip().rstrip(" -_.")
+        segs = flex_str.split(".")
+        cost_center = segs[1].zfill(4)
+        location = segs[2]
+        business_line = segs[3]
+        product = segs[4]
+        account = segs[5]
+        technology = segs[6]
+        intercompany = segs[7]
+        project = segs[8]
+    else:
+        cc = str(r.get("cost_center") or "").strip()
+        cost_center = cc.zfill(4) if (cc and cc.isdigit()) else cc
+        location = str(r.get("location") or "").strip()
+        business_line = str(r.get("business_line") or "").strip()
+        product = str(r.get("product") or "").strip()
+        account = str(r.get("account") or "").strip()
+        technology = str(r.get("technology") or "").strip()
+        intercompany = str(r.get("intercompany") or "").strip()
+        project = str(r.get("project") or "").strip()
+        flex_str = raw_flex
+
+    gl_code = str(r.get("gl_code") or "").strip()
+    if (not gl_code or gl_code in ["0", "nan"]) and account:
+        gl_code = account
+
+    return {
+        "gl_code": gl_code,
+        "description": clean_desc,
+        "flexfield": flex_str,
+        "cost_center": cost_center,
+        "location": location,
+        "business_line": business_line,
+        "product": product,
+        "account": account,
+        "technology": technology,
+        "intercompany": intercompany,
+        "project": project,
+    }
+
+
 def _write_summary_and_detail_sheets(
     writer, cy_unmapped, py_unmapped, report_month, report_year
 ):
@@ -818,11 +1084,21 @@ def _write_summary_and_detail_sheets(
         sign = "+" if val > 0 else ""
         return f"{sign}{val:,.0f}"
 
-    def _categorize_reason(reason):
+    def _categorize_reason(reason, account=None):
         if reason.startswith("International filter:"):
             m = _re.search(r"BL (\d+)", reason)
             bl = m.group(1) if m else "?"
-            return "International BL Filter", bl, reason
+            # Only genuine core international service accounts belong to International BL Filter
+            # Standard genuine international accounts: 412101, 412201, 412801, 413122, 415101
+            # If a row was rejected by the International catch-all because its Business Line is
+            # not an International BL and it does not match another specific unmapped issue category,
+            # it should remain in the general Other unmapped category.
+            intl_genuine_accounts = {"412101", "412201", "412801", "413122", "415101"}
+            acct_str = str(account or "").strip()
+            if acct_str in intl_genuine_accounts:
+                return "International BL Filter", bl, reason
+            else:
+                return "Other", bl, reason
         if reason.startswith("Equipment Sales filter:"):
             m = _re.search(r"Account (\d+)", reason)
             acct = m.group(1) if m else "?"
@@ -976,15 +1252,16 @@ def _write_summary_and_detail_sheets(
     combined["period_activity"] = _num(combined, "period_activity")
     combined["ending_balance"] = _num(combined, "ending_balance")
 
-    combined["_issue_name"] = combined["unmapped_reason"].apply(
-        lambda r: _categorize_reason(r)[0]
-    )
-    combined["_issue_key"] = combined["unmapped_reason"].apply(
-        lambda r: _categorize_reason(r)[1]
-    )
-    combined["_issue_reason"] = combined["unmapped_reason"].apply(
-        lambda r: _categorize_reason(r)[2]
-    )
+    def _apply_categorization(row):
+        r_dict = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+        acct = _resolve_row_segments(r_dict)["account"]
+        reason = str(r_dict.get("unmapped_reason") or "")
+        return _categorize_reason(reason, acct)
+
+    categorized = combined.apply(_apply_categorization, axis=1)
+    combined["_issue_name"] = [c[0] for c in categorized]
+    combined["_issue_key"] = [c[1] for c in categorized]
+    combined["_issue_reason"] = [c[2] for c in categorized]
 
     issue_types = (
         combined.groupby("_issue_name")
@@ -994,6 +1271,7 @@ def _write_summary_and_detail_sheets(
             PY_Rows=("_source", lambda x: (x == "PY").sum()),
             Sample_Reason=("_issue_reason", "first"),
             Sample_Flexfield=("flexfield", "first"),
+            Sample_Desc=("description", "first"),
             Sample_GL=("gl_code", "first"),
             Sample_Product=("product", "first"),
             Sample_BL=("business_line", "first"),
@@ -1061,11 +1339,14 @@ def _write_summary_and_detail_sheets(
     for idx, row in issue_types.iterrows():
         priority = priority_map.get(row["_issue_name"], "LOW")
         sheet_label = f"{idx}. {row['_issue_name']}"
-        sample_dict = {
+        sample_raw = {
             "gl_code": row.get("Sample_GL", ""),
             "product": row.get("Sample_Product", ""),
             "business_line": row.get("Sample_BL", ""),
+            "flexfield": row.get("Sample_Flexfield", ""),
+            "description": row.get("Sample_Desc", ""),
         }
+        sample_dict = _resolve_row_segments(sample_raw)
         info = _get_category_info(
             row["_issue_name"], row["_issue_name"], row["Sample_Reason"], sample_dict
         )
@@ -1159,9 +1440,9 @@ def _write_summary_and_detail_sheets(
 
     align_center = Alignment(vertical="center", wrap_text=True)
 
-    for issue_idx, (issue_name, type_df) in enumerate(
-        combined.groupby("_issue_name"), start=1
-    ):
+    for issue_idx, it_row in issue_types.iterrows():
+        issue_name = it_row["_issue_name"]
+        type_df = combined[combined["_issue_name"] == issue_name]
         cy_type = type_df[type_df["_source"] == "CY"]
         py_type = type_df[type_df["_source"] == "PY"]
         cy_type_pa = cy_type["period_activity"].sum()
@@ -1169,8 +1450,8 @@ def _write_summary_and_detail_sheets(
         py_type_rows = len(py_type)
 
         records = type_df.to_dict("records")
-        sample_row_dict = records[0] if records else {}
-        cat_info = _get_category_info(issue_name, issue_name, sample_row_dict)
+        sample_row_dict = _resolve_row_segments(records[0]) if records else {}
+        cat_info = _get_category_info(issue_name, issue_name, sample_row_dict.get("unmapped_reason", ""), sample_row_dict)
         target_seg = cat_info["target_segment"]
 
         sheet_label = f"{issue_idx}. {issue_name}"
@@ -1227,9 +1508,12 @@ def _write_summary_and_detail_sheets(
         # --- fast bulk write: append all data rows first ---
         all_rows = []
         for row_i, r in enumerate(records):
-            gl_val = str(r.get("gl_code") or "").strip()
-            prod_val = str(r.get("product") or "").strip()
-            bl_val = str(r.get("business_line") or "").strip()
+            resolved = _resolve_row_segments(r)
+            gl_val = resolved["gl_code"]
+            prod_val = resolved["product"]
+            bl_val = resolved["business_line"]
+            cc_val = resolved["cost_center"]
+            tech_val = resolved["technology"]
 
             if issue_name == "GL Account Not Covered":
                 row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Add GL Account {gl_val} and assign Revenue Category"
@@ -1244,24 +1528,34 @@ def _write_summary_and_detail_sheets(
             else:
                 row_fix = f"Open 'Revenue Mapping Workbook' -> 'Code Mapping' sheet -> Update rule for GL {gl_val}, Product {prod_val}, BL {bl_val}"
 
+            reason_val = str(r.get("unmapped_reason") or "").strip()
+            if (
+                "fewer than 9 segments" in reason_val
+                or not reason_val
+                or "Product , BL" in reason_val
+                or reason_val.endswith("GL ")
+                or (issue_name == "Other" and reason_val.startswith("International filter:"))
+            ):
+                reason_val = f"No rule matches GL {gl_val}, CC {cc_val}, Product {prod_val}, Tech {tech_val}, BL {bl_val}"
+
             all_rows.append([
                 r.get("_source", ""),
-                r.get("gl_code", ""),
-                r.get("description", ""),
-                r.get("flexfield", ""),
-                r.get("cost_center", ""),
-                r.get("location", ""),
-                r.get("business_line", ""),
-                r.get("product", ""),
-                r.get("account", ""),
-                r.get("technology", ""),
-                r.get("intercompany", ""),
-                r.get("project", ""),
+                gl_val,
+                resolved["description"],
+                resolved["flexfield"],
+                cc_val,
+                resolved["location"],
+                bl_val,
+                prod_val,
+                resolved["account"],
+                tech_val,
+                resolved["intercompany"],
+                resolved["project"],
                 _fmt_pa(r.get("beginning_balance", 0)),
                 _fmt_pa(r.get("period_activity", 0)),
                 _fmt_pa(r.get("ending_balance", 0)),
                 row_fix,
-                r.get("unmapped_reason", ""),
+                reason_val,
             ])
 
         data_row_start = hdr_r + 1
@@ -1341,6 +1635,124 @@ def _write_summary_and_detail_sheets(
         ws.column_dimensions["P"].width = 75
         ws.column_dimensions["Q"].width = 50
 
+    # Ensure '2. Other' detail sheet is always created even if 0 rows in Other category
+    if not any("Other" in s for s in writer.book.sheetnames):
+        other_sheet_label = "2. Other"
+        ws_other = writer.book.create_sheet(other_sheet_label)
+
+        # Header Callout Banner Block
+        ws_other.append(["ISSUE RESOLUTION GUIDE: 2. Other"])
+        ws_other.merge_cells(start_row=1, start_column=1, end_row=1, end_column=17)
+        c1 = ws_other.cell(row=1, column=1)
+        c1.font = title_font
+        c1.fill = title_fill
+        c1.alignment = Alignment(horizontal="center", vertical="center")
+        ws_other.row_dimensions[1].height = 28
+
+        ws_other.append(["EXPLANATION: Unmapped combination of GL Account, Product, and Business Line segments in the Code Mapping workbook."])
+        ws_other.merge_cells(start_row=2, start_column=1, end_row=2, end_column=17)
+        c2 = ws_other.cell(row=2, column=1)
+        c2.font = Font(name="Calibri", bold=True, color=_DARK_BLUE, size=10)
+        c2.fill = PatternFill(start_color=_LIGHT_BLUE, end_color=_LIGHT_BLUE, fill_type="solid")
+        c2.alignment = Alignment(horizontal="left", vertical="center")
+
+        ws_other.append(["ACTION REQUIRED: Open 'Revenue Mapping Workbook' -> Check 'Code Mapping' sheet -> Ensure GL, Product, and Business Line segments cover this row."])
+        ws_other.merge_cells(start_row=3, start_column=1, end_row=3, end_column=17)
+        c3 = ws_other.cell(row=3, column=1)
+        c3.font = Font(name="Calibri", bold=True, color="7F6000", size=10)
+        c3.fill = amber_fill
+
+        ws_other.append([
+            "IMPACT METRICS: CY Total: 0 rows (0 Rs. PA) | PY Total: 0 rows | Amber highlighted segment columns indicate the unmapped criteria."
+        ])
+        ws_other.merge_cells(start_row=4, start_column=1, end_row=4, end_column=17)
+        c4 = ws_other.cell(row=4, column=1)
+        c4.font = Font(name="Calibri", italic=True, size=10)
+        c4.fill = alt_fill
+
+        ws_other.append([])
+        ws_other.append(detail_cols)
+        hdr_r = ws_other.max_row
+        for c in range(1, len(detail_cols) + 1):
+            cell = ws_other.cell(row=hdr_r, column=c)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = hdr_align
+            cell.border = thin_border
+
+        ws_other.freeze_panes = "A7"
+        ws_other.auto_filter.ref = f"A{hdr_r}:Q{hdr_r}"
+
+        # Informative empty state row
+        empty_row = [
+            "",
+            "",
+            "No Other unmapped rows found for this reporting period",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "0",
+            "0",
+            "0",
+            "No action required",
+            "No unmapped rows in this category",
+        ]
+        ws_other.append(empty_row)
+        msg_r = ws_other.max_row
+        _style_data_rows(ws_other, msg_r, msg_r, len(detail_cols))
+        ws_other.cell(row=msg_r, column=17).fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+
+        ws_other.append([])
+        ws_other.append([
+            "TOTAL",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "0",
+            "0",
+            "0",
+            "",
+            "",
+        ])
+        tot_r = ws_other.max_row
+        for c in range(1, len(detail_cols) + 1):
+            cell = ws_other.cell(row=tot_r, column=c)
+            cell.font = total_font
+            cell.fill = total_fill
+            cell.border = thin_border
+
+        ws_other.column_dimensions["A"].width = 10
+        ws_other.column_dimensions["B"].width = 16
+        ws_other.column_dimensions["C"].width = 30
+        ws_other.column_dimensions["D"].width = 40
+        ws_other.column_dimensions["E"].width = 12
+        ws_other.column_dimensions["F"].width = 10
+        ws_other.column_dimensions["G"].width = 14
+        ws_other.column_dimensions["H"].width = 12
+        ws_other.column_dimensions["I"].width = 14
+        ws_other.column_dimensions["J"].width = 12
+        ws_other.column_dimensions["K"].width = 14
+        ws_other.column_dimensions["L"].width = 10
+        ws_other.column_dimensions["M"].width = 18
+        ws_other.column_dimensions["N"].width = 18
+        ws_other.column_dimensions["O"].width = 18
+        ws_other.column_dimensions["P"].width = 75
+        ws_other.column_dimensions["Q"].width = 50
+
 
 def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
     """Background worker: builds the unmapped Excel and stores result in unmapped_jobs."""
@@ -1370,13 +1782,27 @@ def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
 
         with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
             if not cy_unmapped.empty:
-                cy_export = cy_unmapped[[c for c in display_cols if c in cy_unmapped.columns]].copy()
+                cy_resolved_rows = []
+                for r in cy_unmapped.to_dict("records"):
+                    res = _resolve_row_segments(r)
+                    for col in ["beginning_balance", "period_activity", "ending_balance"]:
+                        res[col] = r.get(col, 0)
+                    cy_resolved_rows.append(res)
+                cy_export = pd.DataFrame(cy_resolved_rows)
+                cy_export = cy_export[[c for c in display_cols if c in cy_export.columns]]
                 cy_export.to_excel(writer, sheet_name="CY Unmapped", index=False)
             else:
                 pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="CY Unmapped", index=False)
 
             if not py_unmapped.empty:
-                py_export = py_unmapped[[c for c in display_cols if c in py_unmapped.columns]].copy()
+                py_resolved_rows = []
+                for r in py_unmapped.to_dict("records"):
+                    res = _resolve_row_segments(r)
+                    for col in ["beginning_balance", "period_activity", "ending_balance"]:
+                        res[col] = r.get(col, 0)
+                    py_resolved_rows.append(res)
+                py_export = pd.DataFrame(py_resolved_rows)
+                py_export = py_export[[c for c in display_cols if c in py_export.columns]]
                 py_export.to_excel(writer, sheet_name="PY Unmapped", index=False)
             else:
                 pd.DataFrame(columns=display_cols).to_excel(writer, sheet_name="PY Unmapped", index=False)
