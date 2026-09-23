@@ -172,3 +172,22 @@ class AnomalyDetectionResult(Base):
     analysis_run_id = Column(String, nullable=True, index=True)
     analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+
+class PLRevenueRecord(Base):
+    """
+    Stores dynamically extracted Month & YTD Revenue figures from official P&L workbooks.
+    """
+    __tablename__ = "pl_revenue_records"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=True, index=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    period_month = Column(String, nullable=False, index=True)  # e.g., "Jun"
+    period_year = Column(Integer, nullable=False, index=True)   # e.g., 2026
+    month_revenue = Column(Float, nullable=False)               # e.g., 6846.0
+    ytd_revenue = Column(Float, nullable=False)                 # e.g., 39745.51
+    source_filename = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+

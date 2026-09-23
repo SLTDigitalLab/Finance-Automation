@@ -121,7 +121,7 @@ const RISK_STYLES = {
     badgeBg: "#DCFCE7",
     borderColor: "#BBF7D0",
     dotBg: "#22C55E",
-    label: "NORMAL",
+    label: "LOW",
     colorName: "green",
   },
   no_data: {
@@ -762,7 +762,7 @@ export default function AnomalyDetection() {
                           <div>
                             <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
                               <Typography variant="body2" sx={{ fontWeight: 800, color: "#16A34A" }}>
-                                Low Risk / Standard Activity
+                                Low Risk
                               </Typography>
                               <Typography variant="body2" sx={{ fontWeight: 800, color: "#082f49" }}>
                                 {formatAmount(summary?.low_count || 0)} ({summary?.total_analyzed ? ((summary.low_count / summary.total_analyzed) * 100).toFixed(2) : 0}%)
@@ -925,7 +925,7 @@ export default function AnomalyDetection() {
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
                       <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#22C55E", display: "inline-block" }} />
                       <Typography variant="caption" sx={{ fontWeight: 800, color: "#475569" }}>
-                        🟢 Normal Activity
+                        🟢 Low Risk
                       </Typography>
                     </Box>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
@@ -1277,7 +1277,7 @@ export default function AnomalyDetection() {
                         <MenuItem value="">All Risk Levels</MenuItem>
                         <MenuItem value="HIGH">🔴 High Risk</MenuItem>
                         <MenuItem value="MEDIUM">🟡 Medium Risk</MenuItem>
-                        <MenuItem value="LOW">🟢 Low Risk / Normal</MenuItem>
+                        <MenuItem value="LOW">🟢 Low Risk</MenuItem>
                       </Select>
                     </Grid>
                   </Grid>
@@ -1575,7 +1575,7 @@ export default function AnomalyDetection() {
                             <MenuItem value="">All Risk Levels</MenuItem>
                             <MenuItem value="HIGH">🔴 High Risk Only</MenuItem>
                             <MenuItem value="MEDIUM">🟡 Medium Risk Only</MenuItem>
-                            <MenuItem value="LOW">🟢 Low Risk / Normal</MenuItem>
+                            <MenuItem value="LOW">🟢 Low Risk</MenuItem>
                           </Select>
                         </Grid>
 
