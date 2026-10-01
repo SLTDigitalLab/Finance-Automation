@@ -123,6 +123,31 @@ export async function uploadFiles(files) {
   return response.json();
 }
 
+async function validateWorkbookFile(path, file, fallback) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/${path}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, fallback));
+  }
+
+  return response.json();
+}
+
+export function validateBudgetFile(file) {
+  return validateWorkbookFile("validate-budget", file, "Budget validation failed");
+}
+
+export function validateMappingFile(file) {
+  return validateWorkbookFile("validate-mapping", file, "Mapping validation failed");
+}
+
 export async function uploadPLFile(file) {
   const formData = new FormData();
   formData.append("file", file);

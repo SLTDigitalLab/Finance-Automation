@@ -10,7 +10,7 @@ import {
 } from "@mui/material";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 
-export default function ValidationErrorModal({ open, onClose, message }) {
+export default function ValidationErrorModal({ open, onClose, message, title }) {
   return (
     <Dialog
       open={open}
@@ -41,7 +41,7 @@ export default function ValidationErrorModal({ open, onClose, message }) {
             <ErrorOutlineIcon sx={{ color: "#DC2626", fontSize: 26 }} />
           </Box>
           <Typography variant="h6" sx={{ fontWeight: 800, color: "#1E293B" }}>
-            Unsupported File Format
+            {title || "Unsupported File Format"}
           </Typography>
         </Box>
       </DialogTitle>
