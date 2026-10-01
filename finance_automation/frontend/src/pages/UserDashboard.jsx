@@ -59,7 +59,14 @@ import {
 import StatusPanel from "../components/StatusPanel";
 import ReportSummaryActions from "../components/ReportSummaryActions";
 import ValidationErrorModal from "../components/ValidationErrorModal";
-import { validateTrialBalanceFile } from "../utils/fileValidation";
+import {
+  validateTrialBalanceFile,
+  validateTrialBalancePair,
+  validateBudgetWorkbook,
+  validateBudgetAgainstTrialBalance,
+  validateMappingWorkbook,
+  validatePLFile,
+} from "../utils/fileValidation";
 
 const theme = createTheme({
   palette: {
@@ -106,6 +113,11 @@ export default function UserDashboard() {
   });
 
   const [files, setFiles] = useState({});
+  // Details read while validating each file, used for cross-file checks:
+  // TB period ({ month, year, label }) and budget ({ budget_year, months_with_data })
+  const [fileMeta, setFileMeta] = useState({});
+  // Field whose file is being checked on the server (shows "Checking file...")
+  const [validatingKey, setValidatingKey] = useState(null);
   const [activeStep, setActiveStep] = useState(() => {
     const saved = sessionStorage.getItem("slt_active_step");
     return saved !== null ? Number(saved) : 0;
@@ -130,12 +142,17 @@ export default function UserDashboard() {
   const [error, setError] = useState(null);
   const [unmappedLoading, setUnmappedLoading] = useState(false);
   const [validationErrorMsg, setValidationErrorMsg] = useState(null);
+  const [validationErrorTitle, setValidationErrorTitle] = useState(null);
+
+  const showValidationError = (message, title = null) => {
+    setValidationErrorTitle(title);
+    setValidationErrorMsg(message);
+  };
 
   // PL Upload States
   const [plFile, setPlFile] = useState(null);
   const [plUploading, setPlUploading] = useState(false);
   const [plSuccessMsg, setPlSuccessMsg] = useState(null);
-  const [plErrorMsg, setPlErrorMsg] = useState(null);
   const [plRevenueData, setPlRevenueData] = useState(null);
 
   useEffect(() => {
@@ -204,19 +221,76 @@ export default function UserDashboard() {
   };
 
   const handleFileChange = useCallback(async (key, event) => {
-    const file = event.target.files[0];
-    if (file) {
+    const input = event.target;
+    const file = input.files[0];
+    // Reset so selecting the same file again still fires onChange
+    input.value = "";
+    if (!file) return;
+
+    const showError = (result) => {
+      setValidationErrorTitle(result.title);
+      setValidationErrorMsg(result.errorMessage);
+    };
+
+    if (key === "tb_current" || key === "tb_previous") {
       const validation = await validateTrialBalanceFile(file, key);
       if (!validation.isValid) {
-        setValidationErrorMsg(validation.errorMessage);
-        if (event.target) {
-          event.target.value = "";
-        }
+        showError(validation);
         return;
       }
-      setFiles((prev) => ({ ...prev, [key]: file }));
+
+      const otherKey = key === "tb_current" ? "tb_previous" : "tb_current";
+      const pairCheck = validateTrialBalancePair(
+        key,
+        { file, period: validation.period },
+        files[otherKey] ? { file: files[otherKey], period: fileMeta[otherKey] } : undefined
+      );
+      if (!pairCheck.isValid) {
+        showError(pairCheck);
+        return;
+      }
+
+      if (key === "tb_current" && files.budget) {
+        const budgetCheck = validateBudgetAgainstTrialBalance(fileMeta.budget, validation.period);
+        if (!budgetCheck.isValid) {
+          showError(budgetCheck);
+          return;
+        }
+      }
+
+      setFileMeta((prev) => ({ ...prev, [key]: validation.period }));
     }
-  }, []);
+
+    if (key === "budget") {
+      setValidatingKey(key);
+      const validation = await validateBudgetWorkbook(file);
+      setValidatingKey(null);
+      if (!validation.isValid) {
+        showError(validation);
+        return;
+      }
+
+      const budgetCheck = validateBudgetAgainstTrialBalance(validation.meta, fileMeta.tb_current);
+      if (!budgetCheck.isValid) {
+        showError(budgetCheck);
+        return;
+      }
+
+      setFileMeta((prev) => ({ ...prev, budget: validation.meta }));
+    }
+
+    if (key === "mapping") {
+      setValidatingKey(key);
+      const validation = await validateMappingWorkbook(file);
+      setValidatingKey(null);
+      if (!validation.isValid) {
+        showError(validation);
+        return;
+      }
+    }
+
+    setFiles((prev) => ({ ...prev, [key]: file }));
+  }, [files, fileMeta]);
 
   const handleRemoveFile = useCallback((key) => {
     setFiles((prev) => {
@@ -224,33 +298,40 @@ export default function UserDashboard() {
       delete next[key];
       return next;
     });
+    setFileMeta((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }, []);
 
   // PL File Handlers
-  const handlePLFileSelect = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      const ext = file.name.split(".").pop().toLowerCase();
-      if (ext !== "xlsx" && ext !== "xls") {
-        setPlErrorMsg("Please select a valid Excel file (.xlsx or .xls).");
-        setPlFile(null);
-        if (event.target) event.target.value = "";
-        return;
-      }
-      setPlFile(file);
-      setPlErrorMsg(null);
-      setPlSuccessMsg(null);
+  const handlePLFileSelect = async (event) => {
+    const input = event.target;
+    const file = input.files[0];
+    // Reset so re-selecting the same file still fires onChange
+    input.value = "";
+    if (!file) return;
+
+    const validation = await validatePLFile(file);
+    if (!validation.isValid) {
+      setPlFile(null);
+      showValidationError(validation.errorMessage, validation.title);
+      return;
     }
+    setPlFile(file);
+    setPlSuccessMsg(null);
   };
 
   const handlePLUpload = async () => {
-    if (!plFile) {
-      setPlErrorMsg("Please choose a PL Excel file before uploading.");
+    const validation = await validatePLFile(plFile);
+    if (!validation.isValid) {
+      setPlFile(null);
+      showValidationError(validation.errorMessage, validation.title);
       return;
     }
 
     setPlUploading(true);
-    setPlErrorMsg(null);
     setPlSuccessMsg(null);
 
     try {
@@ -265,7 +346,7 @@ export default function UserDashboard() {
       });
       setPlFile(null);
     } catch (err) {
-      setPlErrorMsg(err.message || "Failed to process PL workbook.");
+      showValidationError(err.message || "Failed to process PL workbook.", "PL Upload Failed");
     } finally {
       setPlUploading(false);
     }
@@ -334,6 +415,7 @@ export default function UserDashboard() {
 
   const handleReset = () => {
     setFiles({});
+    setFileMeta({});
     setUploadResult(null);
     setReportResult(null);
     setActiveStep(0);
@@ -727,12 +809,6 @@ export default function UserDashboard() {
                     {plSuccessMsg}
                   </Alert>
                 )}
-
-                {plErrorMsg && (
-                  <Alert severity="error" sx={{ mt: 2, borderRadius: 1.5 }} onClose={() => setPlErrorMsg(null)}>
-                    {plErrorMsg}
-                  </Alert>
-                )}
               </Paper>
 
               {/* SECTION 3: SOURCE WORKBOOKS UPLOAD & GENERATION */}
@@ -798,6 +874,15 @@ export default function UserDashboard() {
                                 />
                               )}
                             </Box>
+
+                            {validatingKey === config.key && (
+                              <Box sx={{ mb: 1.5 }}>
+                                <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
+                                  Checking file...
+                                </Typography>
+                                <LinearProgress sx={{ mt: 0.5, height: 4, borderRadius: 999 }} />
+                              </Box>
+                            )}
 
                             {isUploaded ? (
                               <Box>
@@ -960,8 +1045,12 @@ export default function UserDashboard() {
       </div>
       <ValidationErrorModal
         open={!!validationErrorMsg}
-        onClose={() => setValidationErrorMsg(null)}
+        onClose={() => {
+          setValidationErrorMsg(null);
+          setValidationErrorTitle(null);
+        }}
         message={validationErrorMsg}
+        title={validationErrorTitle}
       />
     </ThemeProvider>
   );

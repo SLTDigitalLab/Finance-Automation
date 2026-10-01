@@ -589,6 +589,10 @@ async def upload_files(
     if not bud_val.is_valid:
         raise HTTPException(status_code=400, detail={"errors": bud_val.errors})
 
+    budget_error = _budget_period_error(bud_val.meta, *detect_tb_month_and_year(file_paths["tb_current"]))
+    if budget_error:
+        raise HTTPException(status_code=400, detail={"errors": [budget_error]})
+
     map_val = validate_mapping_workbook(file_paths["mapping"])
     if not map_val.is_valid:
         raise HTTPException(status_code=400, detail={"errors": map_val.errors})
@@ -616,6 +620,63 @@ async def upload_files(
         },
         "warnings": validation.warnings,
     }
+
+
+def _budget_period_error(budget_meta: dict, tb_month: str, tb_year: int):
+    """Checks the budget covers the Current Year TB's year and has targets for its month."""
+    import calendar
+
+    budget_year = budget_meta.get("budget_year")
+    if not budget_year or not tb_year:
+        return None
+    if budget_year != tb_year:
+        return (
+            f"The Revenue Budget Workbook is for {budget_year}, but the Current Year Trial Balance "
+            f"is for {tb_month} {tb_year}. Please upload the {tb_year} budget."
+        )
+    month_names = list(calendar.month_name)
+    if tb_month in month_names and month_names.index(tb_month) not in budget_meta.get("months_with_data", []):
+        return f"The Revenue Budget Workbook has no budget figures for {tb_month} {tb_year}."
+    return None
+
+
+async def _validate_uploaded_workbook(file: UploadFile, validator) -> dict:
+    """Runs a workbook validator on an uploaded file without keeping it."""
+    import tempfile
+
+    ext = Path(file.filename).suffix.lower()
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        result = validator(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    return {
+        "is_valid": result.is_valid,
+        "errors": result.errors,
+        **result.meta,
+    }
+
+
+@router.post("/validate-budget")
+async def validate_budget_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Checks a Revenue Budget workbook before it is used, so the dashboard can warn immediately."""
+    return await _validate_uploaded_workbook(file, validate_budget_workbook)
+
+
+@router.post("/validate-mapping")
+async def validate_mapping_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Checks a Revenue Mapping workbook before it is used, so the dashboard can warn immediately."""
+    return await _validate_uploaded_workbook(file, validate_mapping_workbook)
 
 
 @router.post("/upload-pl")
