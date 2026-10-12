@@ -34,3 +34,6 @@ finance_automation/backend/ai/models/backups/
 
 # Temporary local scripts
 finance_automation/backend/fix_previous_period.py
+
+# Finance Board Pack template (must be deployed)
+!finance_automation/backend/board_pack_templates/*.pptx
