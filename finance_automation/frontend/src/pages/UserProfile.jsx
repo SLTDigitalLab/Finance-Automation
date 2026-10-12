@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { visibleNavItems } from "../config/useCases";
 import {
   ThemeProvider,
   createTheme,
@@ -19,7 +20,8 @@ import {
   Person as PersonIcon,
   VerifiedUser as VerifiedUserIcon,
   QueryStats as ForecastIcon,
-  BugReport as AnomalyIcon,
+  Security as SecurityIcon,
+  Slideshow as BoardPackIcon,
 } from "@mui/icons-material";
 
 const theme = createTheme({
@@ -35,7 +37,8 @@ const theme = createTheme({
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
-  { label: "Anomaly Detection", icon: AnomalyIcon, path: "/anomaly" },
+  { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
+  { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Profile", icon: PersonIcon, path: "/profile", active: true },
 ];
 
@@ -64,7 +67,7 @@ export default function UserProfile() {
               </div>
 
               <nav className="px-4">
-                {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
+                {visibleNavItems(NAV_ITEMS, user).map(({ label, icon: Icon, path, active }) => (
                   <button
                     key={label}
                     type="button"
@@ -208,7 +211,7 @@ export default function UserProfile() {
 
                   <Button
                     variant="outlined"
-                    onClick={() => navigate("/dashboard")}
+                    onClick={() => navigate("/home")}
                     sx={{
                       mt: 4,
                       minWidth: 190,
@@ -225,7 +228,7 @@ export default function UserProfile() {
                       },
                     }}
                   >
-                    View Dashboard
+                    My Use Cases
                   </Button>
                 </div>
               </Paper>

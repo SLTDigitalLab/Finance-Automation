@@ -38,8 +38,15 @@ function getAuthHeaders(headers = {}) {
   return headers;
 }
 
-export async function getRevenueForecast() {
-  const response = await fetch(`${API_BASE}/forecast/revenue`, {
+export async function getRevenueForecast(params = {}) {
+  const queryParts = [];
+  if (params.target_month != null) queryParts.push(`target_month=${encodeURIComponent(params.target_month)}`);
+  if (params.target_year != null) queryParts.push(`target_year=${encodeURIComponent(params.target_year)}`);
+  if (params.target_period) queryParts.push(`target_period=${encodeURIComponent(params.target_period)}`);
+  if (params.horizon != null) queryParts.push(`horizon=${encodeURIComponent(params.horizon)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/forecast/revenue${queryString}`, {
     headers: getAuthHeaders(),
   });
   return safeJsonResponse(response, "Unable to load revenue forecast");
@@ -150,6 +157,65 @@ export async function uploadFiles(files) {
 
   if (!response.ok) {
     throw new Error(await readApiError(response, "Upload failed"));
+  }
+
+  return response.json();
+}
+
+async function validateWorkbookFile(path, file, fallback) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/${path}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, fallback));
+  }
+
+  return response.json();
+}
+
+export function validateBudgetFile(file) {
+  return validateWorkbookFile("validate-budget", file, "Budget validation failed");
+}
+
+export function validateMappingFile(file) {
+  return validateWorkbookFile("validate-mapping", file, "Mapping validation failed");
+}
+
+export async function uploadPLFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/upload-pl`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "PL upload failed"));
+  }
+
+  return response.json();
+}
+
+export async function getPLRevenue(periodMonth, periodYear) {
+  const queryParts = [];
+  if (periodMonth) queryParts.push(`period_month=${encodeURIComponent(periodMonth)}`);
+  if (periodYear) queryParts.push(`period_year=${encodeURIComponent(periodYear)}`);
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+
+  const response = await fetch(`${API_BASE}/pl-revenue${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to fetch PL revenue"));
   }
 
   return response.json();
@@ -646,3 +712,124 @@ export async function getSystemAuditLogs(params = {}) {
   }
   return response.json();
 }
+
+// ANOMALY & FRAUD DETECTION SERVICES
+export async function getAnomalySummary(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+  if (params.period_month) queryParts.push(`period_month=${encodeURIComponent(params.period_month)}`);
+  if (params.revenue_category) queryParts.push(`revenue_category=${encodeURIComponent(params.revenue_category)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/summary${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly summary");
+}
+
+export async function getAnomalyMatrix(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/matrix${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load category x month anomaly matrix");
+}
+
+export async function getAnomalyResults(params = {}) {
+  const queryParts = [];
+  const yr = params.year != null ? params.year : 2026;
+  queryParts.push(`year=${encodeURIComponent(yr)}`);
+  if (params.risk_level) queryParts.push(`risk_level=${encodeURIComponent(params.risk_level)}`);
+  if (params.period_month) queryParts.push(`period_month=${encodeURIComponent(params.period_month)}`);
+  if (params.revenue_category) queryParts.push(`revenue_category=${encodeURIComponent(params.revenue_category)}`);
+  if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
+  if (params.skip != null) queryParts.push(`skip=${params.skip}`);
+  if (params.limit != null) queryParts.push(`limit=${params.limit}`);
+  if (params.sort_by) queryParts.push(`sort_by=${encodeURIComponent(params.sort_by)}`);
+  if (params.sort_order) queryParts.push(`sort_order=${encodeURIComponent(params.sort_order)}`);
+
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  const response = await fetch(`${API_BASE}/anomaly/results${queryString}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly records");
+}
+
+export async function getAnomalyFilterOptions() {
+  const response = await fetch(`${API_BASE}/anomaly/filters`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load anomaly filter options");
+}
+
+export async function triggerAnomalyAnalysis() {
+  const response = await fetch(`${API_BASE}/anomaly/analyze`, {
+    method: "POST",
+    headers: getAuthHeaders({
+      "Content-Type": "application/json",
+    }),
+  });
+  return safeJsonResponse(response, "Failed to trigger anomaly detection analysis");
+}
+
+// Use case access
+export async function getMyUseCases() {
+  const response = await fetch(`${API_BASE}/use-cases/me`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load your use cases");
+}
+
+export async function getUseCaseAssignments() {
+  const response = await fetch(`${API_BASE}/use-cases/assignments`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load use case assignments");
+}
+
+export async function updateUseCaseAssignment(email, useCases) {
+  const response = await fetch(`${API_BASE}/use-cases/assignments`, {
+    method: "PUT",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ email, use_cases: useCases }),
+  });
+  return safeJsonResponse(response, "Failed to save use case assignment");
+}
+
+// Finance Board Pack
+export async function generateBoardPack(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/board-pack/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to generate the board pack");
+}
+
+export async function downloadBoardPack(filename) {
+  const response = await fetch(`${API_BASE}/board-pack/download/${encodeURIComponent(filename)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to download the board pack");
+  }
+
+  const blob = await response.blob();
+  const localUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = localUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(localUrl);
+}
+

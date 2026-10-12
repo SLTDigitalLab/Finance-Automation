@@ -133,16 +133,22 @@ class FinancialTBRecord(Base):
 
 
 class AnomalyDetectionResult(Base):
-    """Stores computed anomaly/fraud detection scores for Trial Balance records."""
+    """
+    Stores AI-detected anomalies in FinancialTBRecord rows.
+
+    IMPORTANT: These records represent statistical outliers and suspicious
+    patterns identified by AI models for human review by the Finance Department.
+    They do NOT constitute confirmed fraud classifications.
+    """
     __tablename__ = "anomaly_detection_results"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-
-    # Reference back to the source TB record and file
-    tb_record_id = Column(Integer, nullable=True, index=True)
-    uploaded_file_id = Column(Integer, nullable=True, index=True)
-
-    # Denormalized key fields for fast filtering (avoids joins on every API call)
+    tb_record_id = Column(
+        Integer, ForeignKey("financial_tb_records.id"), nullable=True, index=True
+    )
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=True, index=True
+    )
     period_month = Column(String, nullable=True, index=True)
     period_year = Column(Integer, nullable=True, index=True)
     gl_code = Column(String, nullable=True)
@@ -153,21 +159,49 @@ class AnomalyDetectionResult(Base):
     business_line = Column(String, nullable=True)
     revenue_category = Column(String, nullable=True, index=True)
     sub_category = Column(String, nullable=True)
-
-    # Financial values (for display in UI — avoids re-joining TB table)
-    period_activity = Column(Float, nullable=True)
-    beginning_balance = Column(Float, nullable=True)
-    ending_balance = Column(Float, nullable=True)
-
-    # Anomaly scores
-    anomaly_score = Column(Float, nullable=True)           # composite 0.0–1.0 (higher = more suspicious)
-    isolation_score = Column(Float, nullable=True)         # normalized Isolation Forest score 0.0–1.0
-    z_score = Column(Float, nullable=True)                 # absolute z-score vs group mean
-    risk_level = Column(String, nullable=True, index=True) # "HIGH" | "MEDIUM" | "LOW"
-    risk_reason = Column(Text, nullable=True)              # human-readable explanation
-
-    # Metadata
+    period_activity = Column(Float, default=0.0)
+    beginning_balance = Column(Float, default=0.0)
+    ending_balance = Column(Float, default=0.0)
+    anomaly_score = Column(Float, default=0.0)
+    isolation_score = Column(Float, default=0.0)
+    z_score = Column(Float, default=0.0)
+    risk_level = Column(String, nullable=True, index=True)  # "HIGH", "MEDIUM", "LOW"
+    risk_reason = Column(Text, nullable=True)
     detection_method = Column(String, default="hybrid_isolation_zscore")
-    model_version = Column(String, nullable=True)
-    analysis_run_id = Column(String, nullable=True, index=True)  # groups results per run
+    model_version = Column(String, default="1.0.0")
+    analysis_run_id = Column(String, nullable=True, index=True)
     analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PLRevenueRecord(Base):
+    """
+    Stores dynamically extracted Month & YTD Revenue figures from official P&L workbooks.
+    """
+    __tablename__ = "pl_revenue_records"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    uploaded_file_id = Column(
+        Integer, ForeignKey("uploaded_finance_files.id"), nullable=True, index=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    period_month = Column(String, nullable=False, index=True)  # e.g., "Jun"
+    period_year = Column(Integer, nullable=False, index=True)   # e.g., 2026
+    month_revenue = Column(Float, nullable=False)               # e.g., 6846.0
+    ytd_revenue = Column(Float, nullable=False)                 # e.g., 39745.51
+    source_filename = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+
+class UserUseCaseAccess(Base):
+    """Which finance use case(s) an email may open. Keyed by email so access can be granted before first login."""
+    __tablename__ = "user_use_case_access"
+    __table_args__ = (
+        UniqueConstraint("email", "use_case_id", name="uq_user_use_case_access_email_use_case"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    email = Column(String, nullable=False, index=True)  # stored lower case
+    use_case_id = Column(String, nullable=False)
+    assigned_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

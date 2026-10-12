@@ -49,6 +49,17 @@ class ReportRequest(BaseModel):
     pass
 
 
+class RevenueSummary(BaseModel):
+    period_month: str = ""
+    period_year: int = 0
+    mapped_month: float = 0.0
+    mapped_ytd: float = 0.0
+    unmapped_month: float = 0.0
+    unmapped_ytd: float = 0.0
+    pl_month_revenue: Optional[float] = None
+    pl_ytd_revenue: Optional[float] = None
+
+
 class ReportResponse(BaseModel):
     status: str
     filename: str = ""
@@ -58,6 +69,7 @@ class ReportResponse(BaseModel):
     report_month: str = ""
     report_year: int = 0
     message: str = ""
+    revenue_summary: Optional[RevenueSummary] = None
 
 
 class ValidationError(BaseModel):

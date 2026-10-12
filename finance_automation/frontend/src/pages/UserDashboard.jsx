@@ -16,6 +16,16 @@ import {
   Typography,
   Chip,
   Tooltip,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Alert,
+  CircularProgress,
+  Stack,
+  Divider,
 } from "@mui/material";
 import {
   CloudUpload as UploadIcon,
@@ -31,20 +41,34 @@ import {
   Person as PersonIcon,
   VerifiedUser as VerifiedUserIcon,
   QueryStats as ForecastIcon,
-  BugReport as AnomalyIcon,
+  Security as SecurityIcon,
+  Slideshow as BoardPackIcon,
+  AccountBalanceWallet as PLIcon,
+  TableChart as TableIcon,
+  InfoOutlined as InfoIcon,
 } from "@mui/icons-material";
 import {
   uploadFiles,
+  uploadPLFile,
+  getPLRevenue,
   generateReport,
   getDownloadUrl,
   generateUnmappedReport,
   getUnmappedDownloadUrl,
   getAdminConfig,
 } from "../services/api";
+import { visibleNavItems } from "../config/useCases";
 import StatusPanel from "../components/StatusPanel";
 import ReportSummaryActions from "../components/ReportSummaryActions";
 import ValidationErrorModal from "../components/ValidationErrorModal";
-import { validateTrialBalanceFile } from "../utils/fileValidation";
+import {
+  validateTrialBalanceFile,
+  validateTrialBalancePair,
+  validateBudgetWorkbook,
+  validateBudgetAgainstTrialBalance,
+  validateMappingWorkbook,
+  validatePLFile,
+} from "../utils/fileValidation";
 
 const theme = createTheme({
   palette: {
@@ -67,9 +91,18 @@ const FILE_CONFIGS = [
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard", active: true },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
-  { label: "Anomaly Detection", icon: AnomalyIcon, path: "/anomaly" },
+  { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
+  { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
+
+const formatCurrencyMn = (val) => {
+  if (val === null || val === undefined || isNaN(Number(val))) return "—";
+  return Number(val).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
 
 export default function UserDashboard() {
   const { user: currentUser, logout } = useAuth();
@@ -83,6 +116,11 @@ export default function UserDashboard() {
   });
 
   const [files, setFiles] = useState({});
+  // Details read while validating each file, used for cross-file checks:
+  // TB period ({ month, year, label }) and budget ({ budget_year, months_with_data })
+  const [fileMeta, setFileMeta] = useState({});
+  // Field whose file is being checked on the server (shows "Checking file...")
+  const [validatingKey, setValidatingKey] = useState(null);
   const [activeStep, setActiveStep] = useState(() => {
     const saved = sessionStorage.getItem("slt_active_step");
     return saved !== null ? Number(saved) : 0;
@@ -107,7 +145,18 @@ export default function UserDashboard() {
   const [error, setError] = useState(null);
   const [unmappedLoading, setUnmappedLoading] = useState(false);
   const [validationErrorMsg, setValidationErrorMsg] = useState(null);
-  const [progressData, setProgressData] = useState(null);
+  const [validationErrorTitle, setValidationErrorTitle] = useState(null);
+
+  const showValidationError = (message, title = null) => {
+    setValidationErrorTitle(title);
+    setValidationErrorMsg(message);
+  };
+
+  // PL Upload States
+  const [plFile, setPlFile] = useState(null);
+  const [plUploading, setPlUploading] = useState(false);
+  const [plSuccessMsg, setPlSuccessMsg] = useState(null);
+  const [plRevenueData, setPlRevenueData] = useState(null);
 
   useEffect(() => {
     if (activeStep > 0) {
@@ -142,9 +191,21 @@ export default function UserDashboard() {
     }
   }, []);
 
+  const fetchPLRevenueData = useCallback(async () => {
+    try {
+      const resp = await getPLRevenue();
+      if (resp && resp.status === "success" && resp.data) {
+        setPlRevenueData(resp.data);
+      }
+    } catch (err) {
+      console.log("No previous PL revenue data available:", err);
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
-  }, [fetchConfig]);
+    fetchPLRevenueData();
+  }, [fetchConfig, fetchPLRevenueData]);
 
   const allFilesUploaded =
     (files.tb_current &&
@@ -163,19 +224,76 @@ export default function UserDashboard() {
   };
 
   const handleFileChange = useCallback(async (key, event) => {
-    const file = event.target.files[0];
-    if (file) {
+    const input = event.target;
+    const file = input.files[0];
+    // Reset so selecting the same file again still fires onChange
+    input.value = "";
+    if (!file) return;
+
+    const showError = (result) => {
+      setValidationErrorTitle(result.title);
+      setValidationErrorMsg(result.errorMessage);
+    };
+
+    if (key === "tb_current" || key === "tb_previous") {
       const validation = await validateTrialBalanceFile(file, key);
       if (!validation.isValid) {
-        setValidationErrorMsg(validation.errorMessage);
-        if (event.target) {
-          event.target.value = "";
-        }
+        showError(validation);
         return;
       }
-      setFiles((prev) => ({ ...prev, [key]: file }));
+
+      const otherKey = key === "tb_current" ? "tb_previous" : "tb_current";
+      const pairCheck = validateTrialBalancePair(
+        key,
+        { file, period: validation.period },
+        files[otherKey] ? { file: files[otherKey], period: fileMeta[otherKey] } : undefined
+      );
+      if (!pairCheck.isValid) {
+        showError(pairCheck);
+        return;
+      }
+
+      if (key === "tb_current" && files.budget) {
+        const budgetCheck = validateBudgetAgainstTrialBalance(fileMeta.budget, validation.period);
+        if (!budgetCheck.isValid) {
+          showError(budgetCheck);
+          return;
+        }
+      }
+
+      setFileMeta((prev) => ({ ...prev, [key]: validation.period }));
     }
-  }, []);
+
+    if (key === "budget") {
+      setValidatingKey(key);
+      const validation = await validateBudgetWorkbook(file);
+      setValidatingKey(null);
+      if (!validation.isValid) {
+        showError(validation);
+        return;
+      }
+
+      const budgetCheck = validateBudgetAgainstTrialBalance(validation.meta, fileMeta.tb_current);
+      if (!budgetCheck.isValid) {
+        showError(budgetCheck);
+        return;
+      }
+
+      setFileMeta((prev) => ({ ...prev, budget: validation.meta }));
+    }
+
+    if (key === "mapping") {
+      setValidatingKey(key);
+      const validation = await validateMappingWorkbook(file);
+      setValidatingKey(null);
+      if (!validation.isValid) {
+        showError(validation);
+        return;
+      }
+    }
+
+    setFiles((prev) => ({ ...prev, [key]: file }));
+  }, [files, fileMeta]);
 
   const handleRemoveFile = useCallback((key) => {
     setFiles((prev) => {
@@ -183,7 +301,59 @@ export default function UserDashboard() {
       delete next[key];
       return next;
     });
+    setFileMeta((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }, []);
+
+  // PL File Handlers
+  const handlePLFileSelect = async (event) => {
+    const input = event.target;
+    const file = input.files[0];
+    // Reset so re-selecting the same file still fires onChange
+    input.value = "";
+    if (!file) return;
+
+    const validation = await validatePLFile(file);
+    if (!validation.isValid) {
+      setPlFile(null);
+      showValidationError(validation.errorMessage, validation.title);
+      return;
+    }
+    setPlFile(file);
+    setPlSuccessMsg(null);
+  };
+
+  const handlePLUpload = async () => {
+    const validation = await validatePLFile(plFile);
+    if (!validation.isValid) {
+      setPlFile(null);
+      showValidationError(validation.errorMessage, validation.title);
+      return;
+    }
+
+    setPlUploading(true);
+    setPlSuccessMsg(null);
+
+    try {
+      const result = await uploadPLFile(plFile);
+      setPlSuccessMsg(result.message || "PL workbook uploaded successfully.");
+      setPlRevenueData({
+        period_month: result.period_month,
+        period_year: result.period_year,
+        month_revenue: result.month_revenue,
+        ytd_revenue: result.ytd_revenue,
+        source_filename: result.filename,
+      });
+      setPlFile(null);
+    } catch (err) {
+      showValidationError(err.message || "Failed to process PL workbook.", "PL Upload Failed");
+    } finally {
+      setPlUploading(false);
+    }
+  };
 
   const handleUploadAndGenerate = async () => {
     setLoading(true);
@@ -198,6 +368,20 @@ export default function UserDashboard() {
       const reportResp = await generateReport(uploadResp.session_id);
       setReportResult(reportResp);
       setActiveStep(3);
+
+      // Refresh PL data in case of newly bound period
+      if (reportResp.report_month && reportResp.report_year) {
+        try {
+          const plResp = await getPLRevenue(reportResp.report_month, reportResp.report_year);
+          if (plResp && plResp.status === "success" && plResp.data) {
+            setPlRevenueData(plResp.data);
+          } else {
+            setPlRevenueData(null);
+          }
+        } catch (e) {
+          setPlRevenueData(null);
+        }
+      }
     } catch (err) {
       const msg = err.message || "An error occurred";
       setError(msg);
@@ -232,38 +416,9 @@ export default function UserDashboard() {
     }
   };
 
-  const handleUnmappedDownload = async () => {
-    if (!uploadResult?.session_id) return;
-    setUnmappedLoading(true);
-    try {
-      const result = await generateUnmappedReport(uploadResult.session_id);
-      const token = localStorage.getItem("token");
-      const headers = {};
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
-      const response = await fetch(getUnmappedDownloadUrl(result.filename), { headers });
-      if (!response.ok) throw new Error("Failed to download unmapped file");
-
-      const blob = await response.blob();
-      const localUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = localUrl;
-      a.download = result.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(localUrl);
-    } catch (err) {
-      const msg = err.message || "Failed to generate unmapped report";
-      setError(msg);
-    } finally {
-      setUnmappedLoading(false);
-    }
-  };
-
   const handleReset = () => {
     setFiles({});
+    setFileMeta({});
     setUploadResult(null);
     setReportResult(null);
     setActiveStep(0);
@@ -277,6 +432,33 @@ export default function UserDashboard() {
     await logout();
     navigate("/login");
   };
+
+  // Active revenue summary values
+  const revSummary = reportResult?.revenue_summary;
+  const activeReportMonth = reportResult?.report_month || revSummary?.period_month || "";
+  const activeReportYear = reportResult?.report_year || revSummary?.period_year || "";
+  const isReportActive = Boolean(activeReportMonth && activeReportYear);
+
+  const displayPeriodMonth = isReportActive ? activeReportMonth : (plRevenueData?.period_month || "");
+  const displayPeriodYear = isReportActive ? activeReportYear : (plRevenueData?.period_year || "");
+
+  const mappedYtd = revSummary?.mapped_ytd ?? (reportResult?.revenue_summary?.mapped_ytd ?? null);
+  const mappedMonth = revSummary?.mapped_month ?? (reportResult?.revenue_summary?.mapped_month ?? null);
+  const unmappedYtd = revSummary?.unmapped_ytd ?? (reportResult?.revenue_summary?.unmapped_ytd ?? null);
+  const unmappedMonth = revSummary?.unmapped_month ?? (reportResult?.revenue_summary?.unmapped_month ?? null);
+
+  const isPlMatchingReport = isReportActive && plRevenueData &&
+    plRevenueData.period_month?.toLowerCase()?.slice(0, 3) === activeReportMonth.toLowerCase()?.slice(0, 3) &&
+    Number(plRevenueData.period_year) === Number(activeReportYear);
+
+  const plYtd = isReportActive
+    ? (revSummary?.pl_ytd_revenue ?? (isPlMatchingReport ? plRevenueData.ytd_revenue : null))
+    : (plRevenueData?.ytd_revenue ?? null);
+  const plMonth = isReportActive
+    ? (revSummary?.pl_month_revenue ?? (isPlMatchingReport ? plRevenueData.month_revenue : null))
+    : (plRevenueData?.month_revenue ?? null);
+
+  const hasSummaryData = mappedYtd !== null || plYtd !== null;
 
   return (
     <ThemeProvider theme={theme}>
@@ -293,15 +475,16 @@ export default function UserDashboard() {
               </div>
 
               <nav className="px-4">
-                {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
+                {visibleNavItems(NAV_ITEMS, currentUser).map(({ label, icon: Icon, path, active }) => (
                   <button
                     key={label}
                     type="button"
                     onClick={() => navigate(path)}
-                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${active
+                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${
+                      active
                         ? "bg-white text-[#071b2a] shadow-lg"
                         : "text-slate-300 hover:bg-white/10 hover:text-white"
-                      }`}
+                    }`}
                   >
                     <Icon fontSize="small" />
                     <span>{label}</span>
@@ -387,6 +570,251 @@ export default function UserDashboard() {
                 error={error}
               />
 
+              {/* SECTION 1: MAIN DASHBOARD REVENUE SUMMARY TABLE */}
+              {hasSummaryData && (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: { xs: 2.5, md: 3.5 },
+                    mb: 3,
+                    borderRadius: 2,
+                    border: "1px solid #dce5ee",
+                    boxShadow: "0 18px 42px rgba(15, 23, 42, 0.08)",
+                    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+                  }}
+                >
+                  <Box sx={{ mb: 2.5, display: "flex", alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between", flexWrap: "wrap", gap: 1.5 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                      <Box sx={{ width: 40, height: 40, borderRadius: 1.5, display: "grid", placeItems: "center", backgroundColor: "#082f4912" }}>
+                        <TableIcon sx={{ color: "#082f49", fontSize: 24 }} />
+                      </Box>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 900, color: "#082f49", lineHeight: 1.2 }}>
+                          Revenue Reconciliation Summary
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
+                          Comparison of Automated Mapping Engine against Official P&L Reference (Amounts in Rs. Mn)
+                        </Typography>
+                      </Box>
+                    </Box>
+
+                    {displayPeriodMonth && (
+                      <Chip
+                        label={`Period: ${displayPeriodMonth} ${displayPeriodYear}`}
+                        color="primary"
+                        sx={{ fontWeight: 900, borderRadius: 1.5, height: 32 }}
+                      />
+                    )}
+                  </Box>
+
+                  <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1.5, borderColor: "#dce5ee", overflow: "hidden" }}>
+                    <Table size="medium">
+                      <TableHead sx={{ backgroundColor: "#082f49" }}>
+                        <TableRow>
+                          <TableCell sx={{ color: "#ffffff", fontWeight: 900, fontSize: "0.875rem", py: 1.5 }}>
+                            Period
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: "#ffffff", fontWeight: 900, fontSize: "0.875rem", py: 1.5 }}>
+                            Mapped (Rs. Mn)
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: "#ffffff", fontWeight: 900, fontSize: "0.875rem", py: 1.5 }}>
+                            Unmapped (Rs. Mn)
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: "#ffffff", fontWeight: 900, fontSize: "0.875rem", py: 1.5 }}>
+                            Total Revenue (PL) (Rs. Mn)
+                          </TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        <TableRow sx={{ "&:nth-of-type(odd)": { backgroundColor: "#f8fafc" }, "&:hover": { backgroundColor: "#f1f5f9" } }}>
+                          <TableCell sx={{ fontWeight: 900, color: "#082f49", fontSize: "0.95rem" }}>
+                            YTD
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800, color: "#047857", fontSize: "0.95rem" }}>
+                            {formatCurrencyMn(mappedYtd)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800, color: "#b45309", fontSize: "0.95rem" }}>
+                            {formatCurrencyMn(unmappedYtd)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: "#082f49", fontSize: "1rem", backgroundColor: "#f0f9ff" }}>
+                            {formatCurrencyMn(plYtd)}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow sx={{ "&:nth-of-type(odd)": { backgroundColor: "#f8fafc" }, "&:hover": { backgroundColor: "#f1f5f9" } }}>
+                          <TableCell sx={{ fontWeight: 900, color: "#082f49", fontSize: "0.95rem" }}>
+                            Month
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800, color: "#047857", fontSize: "0.95rem" }}>
+                            {formatCurrencyMn(mappedMonth)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800, color: "#b45309", fontSize: "0.95rem" }}>
+                            {formatCurrencyMn(unmappedMonth)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: "#082f49", fontSize: "1rem", backgroundColor: "#f0f9ff" }}>
+                            {formatCurrencyMn(plMonth)}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+
+                  <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 1 }}>
+                    <InfoIcon sx={{ fontSize: 16, color: "#64748b" }} />
+                    <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 600 }}>
+                      * Mapped & Unmapped values are derived from Trial Balance automation processing. Total Revenue is dynamically extracted from the uploaded P&L workbook (Row 18 Revenue).
+                    </Typography>
+                  </Box>
+                </Paper>
+              )}
+
+              {/* SECTION 2: PL / TOTAL REVENUE UPLOAD */}
+              <Paper
+                elevation={0}
+                sx={{
+                  p: { xs: 2.5, md: 3 },
+                  mb: 3,
+                  borderRadius: 2,
+                  border: "1px solid #dce5ee",
+                  boxShadow: "0 14px 34px rgba(15, 23, 42, 0.06)",
+                  background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+                }}
+              >
+                <Box sx={{ mb: 2, display: "flex", alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between", flexWrap: "wrap", gap: 1.5 }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                    <Box sx={{ width: 38, height: 38, borderRadius: 1.5, display: "grid", placeItems: "center", backgroundColor: "#0284c714" }}>
+                      <PLIcon sx={{ color: "#0284c7", fontSize: 22 }} />
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 900, color: "#082f49", lineHeight: 1.2 }}>
+                        PL / Total Revenue Upload
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
+                        Upload official P&L workbook (e.g., PL June 26.xlsx) to dynamically establish the benchmark Total Revenue
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  {isReportActive ? (
+                    plYtd !== null && plYtd !== undefined ? (
+                      <Chip
+                        icon={<CheckCircleIcon />}
+                        label={`Active Benchmark: ${activeReportMonth} ${activeReportYear}`}
+                        color="success"
+                        variant="outlined"
+                        size="small"
+                        sx={{ fontWeight: 800, borderRadius: 1.5 }}
+                      />
+                    ) : (
+                      <Chip
+                        label={`No benchmark uploaded for ${activeReportMonth} ${activeReportYear}`}
+                        color="warning"
+                        variant="outlined"
+                        size="small"
+                        sx={{ fontWeight: 800, borderRadius: 1.5 }}
+                      />
+                    )
+                  ) : plRevenueData ? (
+                    <Chip
+                      icon={<CheckCircleIcon />}
+                      label={`Active Benchmark: ${plRevenueData.period_month} ${plRevenueData.period_year}`}
+                      color="success"
+                      variant="outlined"
+                      size="small"
+                      sx={{ fontWeight: 800, borderRadius: 1.5 }}
+                    />
+                  ) : null}
+                </Box>
+
+                <Grid container spacing={2} alignItems="center">
+                  <Grid item xs={12} sm={8} md={9}>
+                    <Box
+                      sx={{
+                        p: 2,
+                        borderRadius: 1.5,
+                        border: "1px dashed #94a3b8",
+                        backgroundColor: "#f8fafc",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: 2,
+                      }}
+                    >
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                        <FileIcon sx={{ color: "#0284c7", fontSize: 24 }} />
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 800, color: "#1e293b" }}>
+                            {plFile ? plFile.name : "Select PL Excel File (.xlsx, .xls)"}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: "#64748b" }}>
+                            {plFile
+                              ? `${(plFile.size / 1024).toFixed(1)} KB`
+                              : isReportActive && plYtd !== null
+                              ? `Current: ${plRevenueData?.source_filename || "Uploaded PL Workbook"} (Month: Rs. ${formatCurrencyMn(plMonth)} Mn | YTD: Rs. ${formatCurrencyMn(plYtd)} Mn)`
+                              : isReportActive && plYtd === null
+                              ? `No benchmark uploaded for ${activeReportMonth} ${activeReportYear}`
+                              : plRevenueData
+                              ? `Current: ${plRevenueData.source_filename || "Uploaded PL Workbook"} (Month: Rs. ${formatCurrencyMn(plRevenueData.month_revenue)} Mn | YTD: Rs. ${formatCurrencyMn(plRevenueData.ytd_revenue)} Mn)`
+                              : "No PL workbook uploaded yet"}
+                          </Typography>
+                        </Box>
+                      </Box>
+
+                      <Button
+                        component="label"
+                        variant="outlined"
+                        size="small"
+                        sx={{
+                          textTransform: "none",
+                          fontWeight: 800,
+                          borderRadius: 1.5,
+                          borderColor: "#0284c7",
+                          color: "#0284c7",
+                          "&:hover": { backgroundColor: "#0284c710", borderColor: "#0369a1" },
+                        }}
+                      >
+                        Choose PL Excel File
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls"
+                          hidden
+                          onChange={handlePLFileSelect}
+                        />
+                      </Button>
+                    </Box>
+                  </Grid>
+
+                  <Grid item xs={12} sm={4} md={3}>
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      disabled={!plFile || plUploading}
+                      onClick={handlePLUpload}
+                      startIcon={plUploading ? <CircularProgress size={18} color="inherit" /> : <UploadIcon />}
+                      sx={{
+                        height: 56,
+                        backgroundColor: "#0284c7",
+                        textTransform: "none",
+                        fontWeight: 900,
+                        borderRadius: 1.5,
+                        boxShadow: "0 8px 18px rgba(2, 132, 199, 0.25)",
+                        "&:hover": { backgroundColor: "#0369a1" },
+                        "&.Mui-disabled": { backgroundColor: "#cbd5e1", color: "#64748b" },
+                      }}
+                    >
+                      {plUploading ? "Processing..." : "Upload PL File"}
+                    </Button>
+                  </Grid>
+                </Grid>
+
+                {plSuccessMsg && (
+                  <Alert severity="success" sx={{ mt: 2, borderRadius: 1.5 }} onClose={() => setPlSuccessMsg(null)}>
+                    {plSuccessMsg}
+                  </Alert>
+                )}
+              </Paper>
+
+              {/* SECTION 3: SOURCE WORKBOOKS UPLOAD & GENERATION */}
               <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3.5 }, borderRadius: 2, border: "1px solid #dce5ee", boxShadow: "0 18px 42px rgba(15, 23, 42, 0.08)", background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)" }}>
                 <Box sx={{ mb: 3, display: "flex", alignItems: { xs: "flex-start", md: "center" }, justifyContent: "space-between", gap: 2, flexDirection: { xs: "column", md: "row" } }}>
                   <Box>
@@ -449,6 +877,15 @@ export default function UserDashboard() {
                                 />
                               )}
                             </Box>
+
+                            {validatingKey === config.key && (
+                              <Box sx={{ mb: 1.5 }}>
+                                <Typography variant="caption" sx={{ color: "#64748b", fontWeight: 700 }}>
+                                  Checking file...
+                                </Typography>
+                                <LinearProgress sx={{ mt: 0.5, height: 4, borderRadius: 999 }} />
+                              </Box>
+                            )}
 
                             {isUploaded ? (
                               <Box>
@@ -611,8 +1048,12 @@ export default function UserDashboard() {
       </div>
       <ValidationErrorModal
         open={!!validationErrorMsg}
-        onClose={() => setValidationErrorMsg(null)}
+        onClose={() => {
+          setValidationErrorMsg(null);
+          setValidationErrorTitle(null);
+        }}
         message={validationErrorMsg}
+        title={validationErrorTitle}
       />
     </ThemeProvider>
   );

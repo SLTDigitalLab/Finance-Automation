@@ -19,6 +19,7 @@ import {
   resetUserPassword,
   getSystemAuditLogs,
 } from "../services/api";
+import UseCaseAccessManager from "../components/UseCaseAccessManager";
 
 export default function AdminLayout() {
   const { user: currentUser, logout } = useAuth();
@@ -224,10 +225,18 @@ export default function AdminLayout() {
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+          <button
+            onClick={() => navigate("/home")}
+            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all text-gray-300 hover:bg-white/5 hover:text-white"
+          >
+            <span>📱</span>
+            <span>All Use Cases</span>
+          </button>
           {[
             { id: "dashboard", label: "Dashboard", icon: "📊" },
             { id: "users", label: "User Directory", icon: "👥" },
             { id: "pending", label: "Pending Approvals", count: pendingList.length, icon: "⏳" },
+            { id: "use-cases", label: "Use Case Access", icon: "🔐" },
             { id: "audits", label: "Audit Logs", icon: "📜" },
             { id: "profile", label: "Admin Profile", icon: "👤" },
           ].map((tab) => (
@@ -603,6 +612,9 @@ export default function AdminLayout() {
               </div>
             </div>
           )}
+
+          {/* USE CASE ACCESS TAB */}
+          {activeTab === "use-cases" && <UseCaseAccessManager showToast={showToast} />}
 
           {/* AUDIT LOGS TAB */}
           {activeTab === "audits" && (

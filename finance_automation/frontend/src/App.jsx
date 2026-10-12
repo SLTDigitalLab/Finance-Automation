@@ -2,6 +2,8 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import UseCaseRoute from "./components/UseCaseRoute";
+import UseCaseLauncher from "./pages/UseCaseLauncher";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -12,6 +14,7 @@ import UserProfile from "./pages/UserProfile";
 import AuthCallback from "./pages/AuthCallback";
 import RevenueForecasting from "./pages/RevenueForecasting";
 import AnomalyDetection from "./pages/AnomalyDetection";
+import FinanceBoardPack from "./pages/FinanceBoardPack";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -57,10 +60,21 @@ export default function App() {
           />
 
           <Route
+            path="/home"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseLauncher />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/dashboard"
             element={
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
-                <UserDashboard />
+                <UseCaseRoute useCase="revenue">
+                  <UserDashboard />
+                </UseCaseRoute>
               </ProtectedRoute>
             }
           />
@@ -78,7 +92,31 @@ export default function App() {
             path="/forecasting"
             element={
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
-                <RevenueForecasting />
+                <UseCaseRoute useCase="revenue">
+                  <RevenueForecasting />
+                </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/anomalies"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseRoute useCase="revenue">
+                  <AnomalyDetection />
+                </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/board-pack"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseRoute useCase="board_pack">
+                  <FinanceBoardPack />
+                </UseCaseRoute>
               </ProtectedRoute>
             }
           />
