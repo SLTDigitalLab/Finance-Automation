@@ -42,6 +42,7 @@ import {
   VerifiedUser as VerifiedUserIcon,
   QueryStats as ForecastIcon,
   Security as SecurityIcon,
+  Slideshow as BoardPackIcon,
   AccountBalanceWallet as PLIcon,
   TableChart as TableIcon,
   InfoOutlined as InfoIcon,
@@ -56,6 +57,7 @@ import {
   getUnmappedDownloadUrl,
   getAdminConfig,
 } from "../services/api";
+import { visibleNavItems } from "../config/useCases";
 import StatusPanel from "../components/StatusPanel";
 import ReportSummaryActions from "../components/ReportSummaryActions";
 import ValidationErrorModal from "../components/ValidationErrorModal";
@@ -90,6 +92,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard", active: true },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
+  { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -472,7 +475,7 @@ export default function UserDashboard() {
               </div>
 
               <nav className="px-4">
-                {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
+                {visibleNavItems(NAV_ITEMS, currentUser).map(({ label, icon: Icon, path, active }) => (
                   <button
                     key={label}
                     type="button"

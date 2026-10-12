@@ -17,12 +17,8 @@ export default function Login() {
     setLocalLoading(true);
     setError(null);
     try {
-      const user = await login(email, password);
-      if (user.role === "Admin") {
-        navigate("/admin");
-      } else {
-        navigate("/dashboard");
-      }
+      await login(email, password);
+      navigate("/home");
     } catch (err) {
       setError(err.message || "Invalid credentials");
     } finally {

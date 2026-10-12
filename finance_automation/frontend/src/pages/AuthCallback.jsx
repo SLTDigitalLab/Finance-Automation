@@ -55,13 +55,9 @@ export default function AuthCallback() {
         console.log("SSO Finish response:", { sso_status: data.sso_status, user: data.user });
 
         if (data.sso_status === "approved" && data.access_token) {
-          finalizeLogin(data.access_token, data.user);
+          await finalizeLogin(data.access_token, data.user);
           console.log("Navigating after SSO approval. User role:", data.user?.role);
-          if (data.user?.role === "Admin") {
-            navigate("/admin", { replace: true });
-          } else {
-            navigate("/dashboard", { replace: true });
-          }
+          navigate("/home", { replace: true });
         } else if (data.sso_status === "new_user") {
           setNewUserData(data.user);
           setStatus("new_user");

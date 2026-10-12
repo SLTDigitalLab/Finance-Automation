@@ -5,8 +5,20 @@ import {
   authLogout,
   authMe,
   getMicrosoftLoginUrl,
+  getMyUseCases,
 } from "../services/api";
 
+/** Adds the use cases this user may open (from the server) to the user object. */
+async function withUseCases(userData) {
+  if (!userData) return userData;
+  try {
+    const { use_cases } = await getMyUseCases();
+    return { ...userData, use_cases };
+  } catch (err) {
+    console.error("Failed to load use case access:", err);
+    return { ...userData, use_cases: [] };
+  }
+}
 
 const AuthContext = createContext(null);
 
@@ -19,7 +31,7 @@ export function AuthProvider({ children }) {
     try {
       if (token) {
         const userData = await authMe();
-        setUser(userData);
+        setUser(await withUseCases(userData));
       } else {
         setUser(null);
       }
@@ -43,8 +55,9 @@ export function AuthProvider({ children }) {
       const data = await authLogin(email, password);
       localStorage.setItem("token", data.access_token);
       setToken(data.access_token);
-      setUser(data.user);
-      return data.user;
+      const userData = await withUseCases(data.user);
+      setUser(userData);
+      return userData;
     } catch (err) {
       throw err;
     } finally {
@@ -67,10 +80,10 @@ export function AuthProvider({ children }) {
    * Called by AuthCallback after the backend returns the local JWT.
    * Stores the token and user in context/localStorage.
    */
-  const finalizeLogin = (accessToken, userData) => {
+  const finalizeLogin = async (accessToken, userData) => {
     localStorage.setItem("token", accessToken);
     setToken(accessToken);
-    setUser(userData);
+    setUser(await withUseCases(userData));
   };
 
   const register = async (fullName, email, password, confirmPassword, role) => {

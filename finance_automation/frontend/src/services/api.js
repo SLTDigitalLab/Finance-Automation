@@ -738,3 +738,59 @@ export async function triggerAnomalyAnalysis() {
   return safeJsonResponse(response, "Failed to trigger anomaly detection analysis");
 }
 
+// Use case access
+export async function getMyUseCases() {
+  const response = await fetch(`${API_BASE}/use-cases/me`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load your use cases");
+}
+
+export async function getUseCaseAssignments() {
+  const response = await fetch(`${API_BASE}/use-cases/assignments`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load use case assignments");
+}
+
+export async function updateUseCaseAssignment(email, useCases) {
+  const response = await fetch(`${API_BASE}/use-cases/assignments`, {
+    method: "PUT",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ email, use_cases: useCases }),
+  });
+  return safeJsonResponse(response, "Failed to save use case assignment");
+}
+
+// Finance Board Pack
+export async function generateBoardPack(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/board-pack/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to generate the board pack");
+}
+
+export async function downloadBoardPack(filename) {
+  const response = await fetch(`${API_BASE}/board-pack/download/${encodeURIComponent(filename)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to download the board pack");
+  }
+
+  const blob = await response.blob();
+  const localUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = localUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(localUrl);
+}
+

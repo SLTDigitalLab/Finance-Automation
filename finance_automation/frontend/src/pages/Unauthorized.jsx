@@ -16,10 +16,10 @@ export default function Unauthorized() {
         </p>
         <div className="mt-8">
           <Link
-            to="/dashboard"
+            to="/home"
             className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-semibold rounded-lg text-white bg-[#0B3041] hover:bg-[#1B6B93] transition-all"
           >
-            Go to User Dashboard
+            Go to My Use Cases
           </Link>
         </div>
       </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { getRevenueForecast } from "../services/api";
+import { visibleNavItems } from "../config/useCases";
 import {
   ThemeProvider,
   createTheme,
@@ -50,6 +51,7 @@ import {
   CalendarMonth as CalendarIcon,
   RestartAlt as ResetIcon,
   Security as SecurityIcon,
+  Slideshow as BoardPackIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -69,6 +71,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting", active: true },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
+  { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -1288,7 +1291,7 @@ function DataUpdatesView({ updateStatus, modelInfo, latestActualMonth, compariso
 // ----------------------------------------------------------------------
 export default function RevenueForecasting() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
 
   const [currentTab, setCurrentTab] = useState(0); // 0: Overview, 1: Categories, 2: Details, 3: Updates
   const [data, setData] = useState(null);
@@ -1475,7 +1478,7 @@ export default function RevenueForecasting() {
               </div>
 
               <nav className="px-4">
-                {NAV_ITEMS.map(({ label, icon: Icon, path, active }) => (
+                {visibleNavItems(NAV_ITEMS, user).map(({ label, icon: Icon, path, active }) => (
                   <button
                     key={label}
                     type="button"
