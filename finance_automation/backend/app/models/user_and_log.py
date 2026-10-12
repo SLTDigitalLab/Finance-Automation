@@ -191,3 +191,17 @@ class PLRevenueRecord(Base):
     source_filename = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+
+
+class UserUseCaseAccess(Base):
+    """Which finance use case(s) an email may open. Keyed by email so access can be granted before first login."""
+    __tablename__ = "user_use_case_access"
+    __table_args__ = (
+        UniqueConstraint("email", "use_case_id", name="uq_user_use_case_access_email_use_case"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    email = Column(String, nullable=False, index=True)  # stored lower case
+    use_case_id = Column(String, nullable=False)
+    assigned_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
