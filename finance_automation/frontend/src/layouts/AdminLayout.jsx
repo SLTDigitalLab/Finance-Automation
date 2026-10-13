@@ -258,7 +258,19 @@ export default function AdminLayout() {
             </button>
           ))}
 
-
+          <div className="pt-3 border-t border-white/10 mt-3">
+            <button
+              onClick={() => navigate("/home")}
+              className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg text-xs font-bold text-sky-300 hover:bg-white/10 hover:text-white transition-all border border-sky-400/20"
+              title="Open Finance Use Cases Launcher"
+            >
+              <div className="flex items-center space-x-2.5">
+                <span className="text-sm">🚀</span>
+                <span>Finance Use Cases</span>
+              </div>
+              <span className="text-[10px] bg-sky-900/80 text-sky-200 px-1.5 py-0.5 rounded font-mono">Launcher</span>
+            </button>
+          </div>
         </nav>
 
         <div className="p-4 border-t border-white/10 mt-auto">
@@ -742,6 +754,7 @@ export default function AdminLayout() {
                       <option value="">All Use Cases / Modules</option>
                       <option value="Revenue Analysis">📈 Revenue Analysis</option>
                       <option value="Finance Board Pack">📊 Finance Board Pack</option>
+                      <option value="Petty Cash Manager">💵 Petty Cash Manager</option>
                       <option value="Auth">🔐 Auth</option>
                       <option value="User Management">👥 User Management</option>
                     </select>

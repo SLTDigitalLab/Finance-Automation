@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 use_case_router = APIRouter(prefix="/api/use-cases", tags=["use-cases"])
 
 # Must match the ids in frontend/src/config/useCases.js
-USE_CASE_IDS = ["revenue", "board_pack"] + [f"use_case_{n}" for n in range(3, 14)]
+USE_CASE_IDS = ["revenue", "board_pack"] + [f"use_case_{n}" for n in range(3, 14)] + ["petty_cash", "use_case_14"]
 
 
 class AssignmentUpdate(BaseModel):
