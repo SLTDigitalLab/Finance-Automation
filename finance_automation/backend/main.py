@@ -51,6 +51,7 @@ async def startup_event():
         from app.database.connection import engine, SessionLocal
         from app.models.user_and_log import (
             Base,
+            AnomalyDetectionResult,
             FinancialTBRecord,
             PLRevenueRecord,
             UploadedFinanceFile,

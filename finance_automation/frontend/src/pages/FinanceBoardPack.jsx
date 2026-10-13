@@ -163,11 +163,10 @@ export default function FinanceBoardPack() {
                     key={label}
                     type="button"
                     onClick={() => navigate(path)}
-                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${
-                      active
+                    className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${active
                         ? "bg-white text-[#071b2a] shadow-lg"
                         : "text-slate-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                      }`}
                   >
                     <Icon fontSize="small" />
                     <span>{label}</span>
@@ -271,9 +270,8 @@ export default function FinanceBoardPack() {
                       setDragging(false);
                       selectFile(e.dataTransfer.files?.[0]);
                     }}
-                    className={`mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
-                      dragging ? "border-[#1B6B93] bg-sky-50" : "border-slate-300 bg-slate-50 hover:border-[#1B6B93] hover:bg-sky-50/60"
-                    }`}
+                    className={`mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${dragging ? "border-[#1B6B93] bg-sky-50" : "border-slate-300 bg-slate-50 hover:border-[#1B6B93] hover:bg-sky-50/60"
+                      }`}
                   >
                     <UploadIcon sx={{ fontSize: 44, color: "#1B6B93" }} />
                     <p className="mt-3 text-sm font-extrabold text-[#082f49]">Drop the Excel file here or click to browse</p>

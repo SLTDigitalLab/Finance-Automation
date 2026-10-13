@@ -17,6 +17,7 @@ async def get_audit_logs(
     search: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
     action: Optional[str] = Query(None),
+    module: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
@@ -31,6 +32,13 @@ async def get_audit_logs(
     # Filter by action
     if action:
         query = query.filter(AuditLog.action == action)
+
+    # Filter by module
+    if module:
+        if module in ["Revenue Analysis", "Revenue Analytics", "Finance"]:
+            query = query.filter(AuditLog.module.in_(["Revenue Analysis", "Revenue Analytics", "Finance"]))
+        else:
+            query = query.filter(AuditLog.module == module)
         
     # Filter by date range
     if start_date:

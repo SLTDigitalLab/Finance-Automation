@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 export default function Login() {
-  const { login, loginWithMicrosoft, isAzureAdConfigured } = useAuth();
+  const { login, loginWithMicrosoft, isAzureAdConfigured, user } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -12,13 +12,28 @@ export default function Login() {
   const [microsoftLoading, setMicrosoftLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // If already logged in, redirect based on role
+  useEffect(() => {
+    if (user) {
+      if (user.role === "Admin") {
+        navigate("/admin", { replace: true });
+      } else {
+        navigate("/home", { replace: true });
+      }
+    }
+  }, [user, navigate]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLocalLoading(true);
     setError(null);
     try {
-      await login(email, password);
-      navigate("/home");
+      const loggedIn = await login(email, password);
+      if (loggedIn?.role === "Admin") {
+        navigate("/admin");
+      } else {
+        navigate("/home");
+      }
     } catch (err) {
       setError(err.message || "Invalid credentials");
     } finally {

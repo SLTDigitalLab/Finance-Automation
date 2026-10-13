@@ -52,6 +52,7 @@ export async function getRevenueForecast(params = {}) {
   return safeJsonResponse(response, "Unable to load revenue forecast");
 }
 
+
 async function parseResponseError(response, defaultMessage = "Request failed") {
   let errorMsg = `${defaultMessage} (${response.status})`;
   try {
@@ -661,6 +662,7 @@ export async function getSystemAuditLogs(params = {}) {
   if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
   if (params.user_id) queryParts.push(`user_id=${params.user_id}`);
   if (params.action) queryParts.push(`action=${encodeURIComponent(params.action)}`);
+  if (params.module) queryParts.push(`module=${encodeURIComponent(params.module)}`);
   if (params.start_date) queryParts.push(`start_date=${params.start_date}`);
   if (params.end_date) queryParts.push(`end_date=${params.end_date}`);
 

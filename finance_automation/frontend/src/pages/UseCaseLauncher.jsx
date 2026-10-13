@@ -92,6 +92,15 @@ export default function UseCaseLauncher() {
     navigate("/login");
   };
 
+  const handleOpenUseCase = (u) => {
+    if (!u?.path) return;
+    if (u.external || u.path.startsWith("http://") || u.path.startsWith("https://")) {
+      window.location.href = u.path;
+    } else {
+      navigate(u.path);
+    }
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -182,7 +191,7 @@ export default function UseCaseLauncher() {
                     key={useCase.id}
                     useCase={useCase}
                     allowed={allowedIds.includes(useCase.id)}
-                    onOpen={(u) => navigate(u.path)}
+                    onOpen={handleOpenUseCase}
                   />
                 ))}
               </div>

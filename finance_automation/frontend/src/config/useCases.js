@@ -1,6 +1,7 @@
 import {
   Apps as AppsIcon,
   AccountBalance as AccountBalanceIcon,
+  AccountBalanceWallet as AccountBalanceWalletIcon,
   Assessment as AssessmentIcon,
   BarChart as BarChartIcon,
   Calculate as CalculateIcon,
@@ -16,7 +17,7 @@ import {
 } from "@mui/icons-material";
 
 /**
- * The 13 finance automation use cases shown on the launcher (/home).
+ * The 14 finance automation use cases shown on the launcher (/home).
  *
  * - `path`: where the icon navigates. `null` = not built yet ("Coming soon").
  * - `paths`: every route that belongs to the use case (used to guard direct URL access).
@@ -51,6 +52,16 @@ export const USE_CASES = [
   { id: "use_case_11", name: "Use Case 11", icon: BarChartIcon, color: "#0891B2", path: null, paths: [] },
   { id: "use_case_12", name: "Use Case 12", icon: InventoryIcon, color: "#B45309", path: null, paths: [] },
   { id: "use_case_13", name: "Use Case 13", icon: InsightsIcon, color: "#4F46E5", path: null, paths: [] },
+  {
+    id: "petty_cash",
+    name: "Petty Cash Manager",
+    description: "Petty Cash management system portal",
+    icon: AccountBalanceWalletIcon,
+    color: "#059669",
+    path: "https://pettycash.sltdigitallab.lk/login",
+    external: true,
+    paths: [],
+  },
 ];
 
 /**

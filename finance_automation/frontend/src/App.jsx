@@ -1,6 +1,6 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { AuthProvider } from "./contexts/AuthContext";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import UseCaseRoute from "./components/UseCaseRoute";
 import UseCaseLauncher from "./pages/UseCaseLauncher";
@@ -25,12 +25,16 @@ import FinanceBoardPack from "./pages/FinanceBoardPack";
  * Otherwise it redirects to /login as normal.
  */
 function RootHandler() {
+  const { user, loading } = useAuth();
   const { search } = useLocation();
   const params = new URLSearchParams(search);
   const hasOAuthCallback = params.has("code") && params.has("state");
 
   if (hasOAuthCallback) {
     return <AuthCallback />;
+  }
+  if (!loading && user) {
+    return <Navigate to={user.role === "Admin" ? "/admin" : "/home"} replace />;
   }
   return <Navigate to="/login" replace />;
 }
@@ -117,6 +121,15 @@ export default function App() {
                 <UseCaseRoute useCase="board_pack">
                   <FinanceBoardPack />
                 </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/anomaly"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <AnomalyDetection />
               </ProtectedRoute>
             }
           />

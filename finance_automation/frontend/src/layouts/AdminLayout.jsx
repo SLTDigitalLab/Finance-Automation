@@ -20,6 +20,7 @@ import {
   getSystemAuditLogs,
 } from "../services/api";
 import UseCaseAccessManager from "../components/UseCaseAccessManager";
+import { USE_CASES } from "../config/useCases";
 
 export default function AdminLayout() {
   const { user: currentUser, logout } = useAuth();
@@ -39,7 +40,10 @@ export default function AdminLayout() {
 
   const [auditSearch, setAuditSearch] = useState("");
   const [auditAction, setAuditAction] = useState("");
+  const [auditModule, setAuditModule] = useState("");
   const [auditUserId, setAuditUserId] = useState("");
+  const [auditStartDate, setAuditStartDate] = useState("");
+  const [auditEndDate, setAuditEndDate] = useState("");
   const [auditPage, setAuditPage] = useState(1);
   const [auditLimit] = useState(15);
 
@@ -77,7 +81,10 @@ export default function AdminLayout() {
         limit: auditLimit,
         search: auditSearch,
         action: auditAction,
+        module: auditModule || undefined,
         user_id: auditUserId || undefined,
+        start_date: auditStartDate || undefined,
+        end_date: auditEndDate || undefined,
       });
       setAuditResponse(data);
     } catch (err) {
@@ -92,7 +99,7 @@ export default function AdminLayout() {
     if (activeTab === "audits") {
       loadAudits();
     }
-  }, [activeTab, auditPage, auditSearch, auditAction, auditUserId]);
+  }, [activeTab, auditPage, auditSearch, auditAction, auditModule, auditUserId, auditStartDate, auditEndDate]);
 
   const handleCreateUserSubmit = async (e) => {
     e.preventDefault();
@@ -225,13 +232,7 @@ export default function AdminLayout() {
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-          <button
-            onClick={() => navigate("/home")}
-            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all text-gray-300 hover:bg-white/5 hover:text-white"
-          >
-            <span>📱</span>
-            <span>All Use Cases</span>
-          </button>
+
           {[
             { id: "dashboard", label: "Dashboard", icon: "📊" },
             { id: "users", label: "User Directory", icon: "👥" },
@@ -256,6 +257,20 @@ export default function AdminLayout() {
               )}
             </button>
           ))}
+
+          <div className="pt-3 border-t border-white/10 mt-3">
+            <button
+              onClick={() => navigate("/home")}
+              className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg text-xs font-bold text-sky-300 hover:bg-white/10 hover:text-white transition-all border border-sky-400/20"
+              title="Open Finance Use Cases Launcher"
+            >
+              <div className="flex items-center space-x-2.5">
+                <span className="text-sm">🚀</span>
+                <span>Finance Use Cases</span>
+              </div>
+              <span className="text-[10px] bg-sky-900/80 text-sky-200 px-1.5 py-0.5 rounded font-mono">Launcher</span>
+            </button>
+          </div>
         </nav>
 
         <div className="p-4 border-t border-white/10 mt-auto">
@@ -399,6 +414,7 @@ export default function AdminLayout() {
                   </button>
                 </div>
               </div>
+
             </div>
           )}
 
@@ -592,134 +608,326 @@ export default function AdminLayout() {
           {activeTab === "use-cases" && <UseCaseAccessManager showToast={showToast} />}
 
           {/* AUDIT LOGS TAB */}
-          {activeTab === "audits" && (
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-6">
-              {/* Filtering Toolbar */}
-              <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
-                <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                  <input
-                    type="text"
-                    placeholder="Search logs..."
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
-                    value={auditSearch}
-                    onChange={(e) => {
-                      setAuditSearch(e.target.value);
-                      setAuditPage(1);
-                    }}
-                  />
-                  <select
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
-                    value={auditAction}
-                    onChange={(e) => {
-                      setAuditAction(e.target.value);
-                      setAuditPage(1);
-                    }}
-                  >
-                    <option value="">All Actions</option>
-                    <option value="Login">Login</option>
-                    <option value="Logout">Logout</option>
-                    <option value="Failed Login">Failed Login</option>
-                    <option value="Registration">Registration</option>
-                    <option value="User Approval">User Approval</option>
-                    <option value="User Rejection">User Rejection</option>
-                    <option value="User Creation">User Creation</option>
-                    <option value="User Update">User Update</option>
-                    <option value="User Deletion">User Deletion</option>
-                    <option value="Password Reset">Password Reset</option>
-                    <option value="File Upload">File Upload</option>
-                    <option value="Report Generation">Report Generation</option>
-                    <option value="Unmapped Report Generation">Unmapped Report Generation</option>
-                    <option value="Download Report">Download Report</option>
-                    <option value="Download Unmapped Rows">Download Unmapped Rows</option>
-                  </select>
-                  <select
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
-                    value={auditUserId}
-                    onChange={(e) => {
-                      setAuditUserId(e.target.value);
-                      setAuditPage(1);
-                    }}
-                  >
-                    <option value="">All Users</option>
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name} ({u.email})
-                      </option>
-                    ))}
-                  </select>
+          {activeTab === "audits" && (() => {
+            // Action colour map — covers all real backend actions
+            const actionStyle = (action) => {
+              if (!action) return "bg-gray-100 text-gray-600";
+              if (action.includes("Failed")) return "bg-red-100 text-red-700";
+              if (action === "Login" || action === "Azure AD Login" || action === "Microsoft SSO Login") return "bg-emerald-100 text-emerald-700";
+              if (action === "Logout") return "bg-slate-100 text-slate-600";
+              if (action.includes("Registration") || action.includes("SSO Registration")) return "bg-blue-100 text-blue-700";
+              if (action === "User Approval" || action === "User Activation") return "bg-green-100 text-green-700";
+              if (action === "User Rejection" || action === "User Deactivation" || action === "User Deletion") return "bg-red-100 text-red-700";
+              if (action === "Role Change" || action === "User Creation" || action === "User Update") return "bg-purple-100 text-purple-700";
+              if (action === "Password Reset" || action === "Forgot Password Reset" || action === "Password Reset OTP Request") return "bg-orange-100 text-orange-700";
+              if (action === "Report Generation" || action === "Download Report") return "bg-teal-100 text-teal-700";
+              if (action.includes("Upload")) return "bg-cyan-100 text-cyan-700";
+              if (action.includes("Forecast")) return "bg-violet-100 text-violet-700";
+              if (action === "Use Case Assignment") return "bg-indigo-100 text-indigo-700";
+              if (action.includes("Pending")) return "bg-amber-100 text-amber-700";
+              return "bg-gray-100 text-gray-600";
+            };
+
+            const totalPages = Math.ceil(auditResponse.total / auditLimit) || 1;
+
+            // Summary counts from current page (approximate for display)
+            const logins = auditResponse.logs.filter(l => l.action === "Login" || l.action === "Azure AD Login" || l.action === "Microsoft SSO Login").length;
+            const failures = auditResponse.logs.filter(l => l.action === "Failed Login").length;
+            const registrations = auditResponse.logs.filter(l => l.action?.includes("Registration")).length;
+            const adminActions = auditResponse.logs.filter(l =>
+              ["User Approval","User Rejection","User Creation","User Deletion","Role Change","User Activation","User Deactivation","Password Reset","Use Case Assignment"].includes(l.action)
+            ).length;
+
+            const clearFilters = () => {
+              setAuditSearch("");
+              setAuditAction("");
+              setAuditModule("");
+              setAuditUserId("");
+              setAuditStartDate("");
+              setAuditEndDate("");
+              setAuditPage(1);
+            };
+
+            return (
+              <div className="space-y-5">
+
+                {/* ── Summary stat pills ── */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                    { label: "Total Events", value: auditResponse.total, colour: "bg-[#0B3552] text-white", icon: "📋" },
+                    { label: "Successful Logins", value: logins, colour: "bg-emerald-600 text-white", icon: "✅" },
+                    { label: "Failed Logins", value: failures, colour: "bg-red-600 text-white", icon: "⚠️" },
+                    { label: "Admin Actions", value: adminActions, colour: "bg-purple-600 text-white", icon: "🛡️" },
+                  ].map((s) => (
+                    <div key={s.label} className={`${s.colour} rounded-xl px-5 py-4 flex items-center gap-3 shadow-sm`}>
+                      <span className="text-2xl opacity-80">{s.icon}</span>
+                      <div>
+                        <p className="text-xs font-semibold opacity-80 uppercase tracking-wide">{s.label}</p>
+                        <p className="text-2xl font-black">{s.value}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Pagination Controls */}
-                <div className="flex items-center space-x-2">
-                  <button
-                    disabled={auditPage <= 1}
-                    onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
-                    className="px-3 py-1 border border-gray-300 rounded disabled:opacity-50 text-xs font-bold"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-xs text-gray-500">
-                    Page {auditPage} of {Math.ceil(auditResponse.total / auditLimit) || 1} ({auditResponse.total} items)
-                  </span>
-                  <button
-                    disabled={auditPage >= Math.ceil(auditResponse.total / auditLimit)}
-                    onClick={() => setAuditPage((p) => p + 1)}
-                    className="px-3 py-1 border border-gray-300 rounded disabled:opacity-50 text-xs font-bold"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
+                {/* ── Filter toolbar ── */}
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row gap-3 flex-wrap">
+                    {/* Search */}
+                    <div className="relative flex-1 min-w-[180px]">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+                      <input
+                        type="text"
+                        placeholder="Search user, action, description, IP…"
+                        className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
+                        value={auditSearch}
+                        onChange={(e) => { setAuditSearch(e.target.value); setAuditPage(1); }}
+                      />
+                    </div>
 
-              {/* Table */}
-              <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50 text-gray-700 uppercase font-semibold text-xs">
-                    <tr>
-                      <th className="px-6 py-3 text-left">Date / Time</th>
-                      <th className="px-6 py-3 text-left">User</th>
-                      <th className="px-6 py-3 text-left">Action</th>
-                      <th className="px-6 py-3 text-left">Module</th>
-                      <th className="px-6 py-3 text-left">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 text-gray-600 bg-white">
-                    {auditResponse.logs.length === 0 ? (
-                      <tr>
-                        <td colSpan="5" className="text-center py-8 text-gray-400">
-                          No audit trace logs matched standard queries.
-                        </td>
-                      </tr>
-                    ) : (
-                      auditResponse.logs.map((log) => (
-                        <tr key={log.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-xs whitespace-nowrap">
-                            {new Date(log.created_at + "Z").toLocaleString("en-US", { 
-                              timeZone: "Asia/Colombo",
-                              dateStyle: "medium",
-                              timeStyle: "medium"
-                            })} SLST
-                          </td>
-                          <td className="px-6 py-4 font-semibold text-gray-800">
-                            {log.user_name || `ID: ${log.user_id}` || "System"}
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${log.action.includes("Failed") ? "bg-red-100 text-red-700" : log.action.includes("Login") ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>
-                              {log.action}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-xs">{log.module}</td>
-                          <td className="px-6 py-4 text-xs max-w-xs truncate" title={log.description}>
-                            {log.description}
-                          </td>
-                        </tr>
-                      ))
+                    {/* Action filter */}
+                    <select
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1B6B93] min-w-[180px]"
+                      value={auditAction}
+                      onChange={(e) => { setAuditAction(e.target.value); setAuditPage(1); }}
+                    >
+                      <option value="">All Actions</option>
+                      <optgroup label="Authentication">
+                        <option value="Login">Login</option>
+                        <option value="Logout">Logout</option>
+                        <option value="Failed Login">Failed Login</option>
+                        <option value="Registration">Registration</option>
+                        <option value="Password Reset OTP Request">Password Reset OTP Request</option>
+                        <option value="Forgot Password Reset">Forgot Password Reset</option>
+                      </optgroup>
+                      <optgroup label="Microsoft / Azure SSO">
+                        <option value="Azure AD Login">Azure AD Login</option>
+                        <option value="Azure AD Registration">Azure AD Registration</option>
+                        <option value="Microsoft SSO Login">Microsoft SSO Login</option>
+                        <option value="Microsoft SSO Login — Pending">Microsoft SSO Login — Pending</option>
+                        <option value="Microsoft SSO Registration">Microsoft SSO Registration</option>
+                      </optgroup>
+                      <optgroup label="User Management">
+                        <option value="User Creation">User Creation</option>
+                        <option value="User Approval">User Approval</option>
+                        <option value="User Rejection">User Rejection</option>
+                        <option value="User Activation">User Activation</option>
+                        <option value="User Deactivation">User Deactivation</option>
+                        <option value="User Deletion">User Deletion</option>
+                        <option value="Role Change">Role Change</option>
+                        <option value="Password Reset">Password Reset</option>
+                      </optgroup>
+                      <optgroup label="Use Cases">
+                        <option value="Use Case Assignment">Use Case Assignment</option>
+                      </optgroup>
+                      <optgroup label="Revenue Analysis">
+                        <option value="File Upload">File Upload</option>
+                        <option value="Report Generation">Report Generation</option>
+                        <option value="PL File Upload">PL File Upload</option>
+                        <option value="Actual Revenue File Upload">Actual Revenue File Upload</option>
+                        <option value="Daily Revenue File Upload">Daily Revenue File Upload</option>
+                        <option value="Forecast Generation">Forecast Generation</option>
+                      </optgroup>
+                      <optgroup label="Finance Board Pack">
+                        <option value="Report Generation">Report Generation</option>
+                        <option value="Download Report">Download Report</option>
+                      </optgroup>
+                    </select>
+
+                    {/* User filter */}
+                    <select
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1B6B93] min-w-[160px]"
+                      value={auditUserId}
+                      onChange={(e) => { setAuditUserId(e.target.value); setAuditPage(1); }}
+                    >
+                      <option value="">All Users</option>
+                      {users.map((u) => (
+                        <option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>
+                      ))}
+                    </select>
+
+                    {/* Module / Use Case filter */}
+                    <select
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1B6B93] min-w-[180px]"
+                      value={auditModule}
+                      onChange={(e) => { setAuditModule(e.target.value); setAuditPage(1); }}
+                    >
+                      <option value="">All Use Cases / Modules</option>
+                      <option value="Revenue Analysis">📈 Revenue Analysis</option>
+                      <option value="Finance Board Pack">📊 Finance Board Pack</option>
+                      <option value="Petty Cash Manager">💵 Petty Cash Manager</option>
+                      <option value="Auth">🔐 Auth</option>
+                      <option value="User Management">👥 User Management</option>
+                    </select>
+                  </div>
+
+                  {/* Date range row */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">From</label>
+                      <input
+                        type="date"
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
+                        value={auditStartDate}
+                        onChange={(e) => { setAuditStartDate(e.target.value); setAuditPage(1); }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">To</label>
+                      <input
+                        type="date"
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B6B93]"
+                        value={auditEndDate}
+                        onChange={(e) => { setAuditEndDate(e.target.value); setAuditPage(1); }}
+                      />
+                    </div>
+                    {(auditSearch || auditAction || auditModule || auditUserId || auditStartDate || auditEndDate) && (
+                      <button
+                        onClick={clearFilters}
+                        className="px-3 py-2 text-xs font-bold text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-all"
+                      >
+                        ✕ Clear Filters
+                      </button>
                     )}
-                  </tbody>
-                </table>
+                    <span className="ml-auto text-xs text-gray-400 font-semibold">
+                      {auditResponse.total} record{auditResponse.total !== 1 ? "s" : ""} found
+                    </span>
+                  </div>
+                </div>
+
+                {/* ── Audit table ── */}
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-100 text-sm">
+                      <thead className="bg-[#0B3552] text-white">
+                        <tr>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider whitespace-nowrap">Date / Time (SLST)</th>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider">User</th>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider">Action</th>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider">Module</th>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider">Description</th>
+                          <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider">IP Address</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 bg-white">
+                        {auditResponse.logs.length === 0 ? (
+                          <tr>
+                            <td colSpan="6" className="text-center py-12">
+                              <div className="flex flex-col items-center gap-2 text-gray-400">
+                                <span className="text-4xl">📋</span>
+                                <p className="font-semibold text-sm">No audit records matched your filters.</p>
+                                <button onClick={clearFilters} className="text-xs text-blue-600 underline mt-1">Clear all filters</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          auditResponse.logs.map((log, idx) => (
+                            <tr key={log.id} className={`hover:bg-blue-50/40 transition-colors ${idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}>
+                              {/* Timestamp */}
+                              <td className="px-5 py-3 whitespace-nowrap">
+                                <p className="text-xs font-semibold text-gray-700">
+                                  {new Date(log.created_at + "Z").toLocaleDateString("en-GB", { timeZone: "Asia/Colombo", day: "2-digit", month: "short", year: "numeric" })}
+                                </p>
+                                <p className="text-[11px] text-gray-400 font-medium">
+                                  {new Date(log.created_at + "Z").toLocaleTimeString("en-US", { timeZone: "Asia/Colombo", hour: "2-digit", minute: "2-digit", second: "2-digit" })} SLST
+                                </p>
+                              </td>
+
+                              {/* User */}
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-7 w-7 rounded-full bg-[#0B3552]/10 flex items-center justify-center text-[10px] font-black text-[#0B3552] shrink-0">
+                                    {(log.user_name || "S")[0].toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <p className="font-semibold text-gray-800 text-xs leading-tight">{log.user_name || "System"}</p>
+                                    {log.user_id && <p className="text-[10px] text-gray-400">ID: {log.user_id}</p>}
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Action badge */}
+                              <td className="px-5 py-3">
+                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap ${actionStyle(log.action)}`}>
+                                  {log.action}
+                                </span>
+                              </td>
+
+                              {/* Module */}
+                              <td className="px-5 py-3">
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
+                                  log.module === "Finance" || log.module === "Revenue Analysis" || log.module === "Revenue Analytics"
+                                    ? "bg-blue-50 text-blue-700 border border-blue-200"
+                                    : log.module === "Finance Board Pack"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : log.module === "Auth"
+                                    ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                    : "bg-gray-100 text-gray-700"
+                                }`}>
+                                  {log.module === "Finance" ? "Revenue Analysis" : log.module}
+                                </span>
+                              </td>
+
+                              {/* Description */}
+                              <td className="px-5 py-3 max-w-[260px]">
+                                <Tooltip title={log.description || ""} placement="top">
+                                  <p className="text-xs text-gray-600 truncate" style={{ maxWidth: 240 }}>
+                                    {log.description || <span className="text-gray-300 italic">—</span>}
+                                  </p>
+                                </Tooltip>
+                              </td>
+
+                              {/* IP */}
+                              <td className="px-5 py-3">
+                                <Tooltip title={log.user_agent || ""} placement="top">
+                                  <span className="text-xs font-mono text-gray-500 cursor-default">
+                                    {log.ip_address || "—"}
+                                  </span>
+                                </Tooltip>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination footer */}
+                  <div className="flex items-center justify-between border-t border-gray-100 px-5 py-3 bg-gray-50">
+                    <p className="text-xs text-gray-500">
+                      Showing {Math.min((auditPage - 1) * auditLimit + 1, auditResponse.total)}–{Math.min(auditPage * auditLimit, auditResponse.total)} of {auditResponse.total}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        disabled={auditPage <= 1}
+                        onClick={() => setAuditPage(1)}
+                        className="px-2.5 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 text-xs font-bold hover:bg-gray-100 transition-all"
+                        title="First page"
+                      >«</button>
+                      <button
+                        disabled={auditPage <= 1}
+                        onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
+                        className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 text-xs font-bold hover:bg-gray-100 transition-all"
+                      >Previous</button>
+                      <span className="px-4 py-1.5 text-xs font-semibold text-gray-600">
+                        Page {auditPage} of {totalPages}
+                      </span>
+                      <button
+                        disabled={auditPage >= totalPages}
+                        onClick={() => setAuditPage((p) => p + 1)}
+                        className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 text-xs font-bold hover:bg-gray-100 transition-all"
+                      >Next</button>
+                      <button
+                        disabled={auditPage >= totalPages}
+                        onClick={() => setAuditPage(totalPages)}
+                        className="px-2.5 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 text-xs font-bold hover:bg-gray-100 transition-all"
+                        title="Last page"
+                      >»</button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ADMIN PROFILE TAB */}
           {activeTab === "profile" && (
