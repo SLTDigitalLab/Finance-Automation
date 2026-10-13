@@ -225,13 +225,7 @@ export default function AdminLayout() {
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-          <button
-            onClick={() => navigate("/home")}
-            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all text-gray-300 hover:bg-white/5 hover:text-white"
-          >
-            <span>📱</span>
-            <span>All Use Cases</span>
-          </button>
+
           {[
             { id: "dashboard", label: "Dashboard", icon: "📊" },
             { id: "users", label: "User Directory", icon: "👥" },
@@ -257,30 +251,7 @@ export default function AdminLayout() {
             </button>
           ))}
 
-          {/* Separator for AI features */}
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "8px 0", paddingTop: 8 }}>
-            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 16px 6px" }}>
-              AI Analytics
-            </div>
-            <button
-              onClick={() => navigate("/anomaly")}
-              className="w-full flex items-center px-4 py-3 rounded-lg text-sm font-semibold transition-all text-gray-300 hover:bg-white/5 hover:text-white"
-            >
-              <div className="flex items-center space-x-3">
-                <span>🔍</span>
-                <span>Anomaly Detection</span>
-              </div>
-            </button>
-            <button
-              onClick={() => navigate("/forecasting")}
-              className="w-full flex items-center px-4 py-3 rounded-lg text-sm font-semibold transition-all text-gray-300 hover:bg-white/5 hover:text-white"
-            >
-              <div className="flex items-center space-x-3">
-                <span>📈</span>
-                <span>Revenue Forecasting</span>
-              </div>
-            </button>
-          </div>
+
         </nav>
 
         <div className="p-4 border-t border-white/10 mt-auto">
