@@ -4,7 +4,12 @@ Reads the monthly "Sub workings" workbook for the Finance Board Pack.
 Data sources (visible tabs only — hidden legacy tabs are skipped):
   Tab 1  INCOME Amalg YTD <Mon> <Year>  -> Group Financials slides (actual vs last year)
   Tab 2  BD Slides-SLT-Mobtel-Grp       -> Executive Summary slides (actual vs budget)
-  SLTSL                                 -> Executive Summary - SLTS (YTD actual only)
+  SLTSL                                 -> Executive Summary – SLTS YTD budget
+
+SLTS Executive Summary uses three sources:
+  - YTD Actuals & Last Year: INCOME Amalg tab, SLTS Amalgamated column, Board Pack Slides section
+  - Month Actuals & Last Year: INCOME Amalg tab, SLTS Amalgamated column, Month block
+  - YTD & Month Budget: SLTSL tab, "For the Period of ..." column
 
 Rows are located by their labels in column A (column B for SLTSL) and entity
 columns by their header text, so the reader keeps working when rows or
@@ -35,9 +40,13 @@ LABEL_KEYS = {
     "operatingprofit": "operating_profit",
     "ebit": "ebit",
     "netfinancecost": "net_finance_cost",
+    "netinterest": "net_finance_cost",      # INCOME Amalg SLTS block label
     "exchangegainloss": "exchange_gain",
+    "foreignexchangegainloss": "exchange_gain",  # INCOME Amalg main P&L label
     "otherincome": "other_income",
+    "nonoperatingincome": "other_income",   # SLTSL label
     "taxation": "taxation",
+    "incometax": "taxation",                # SLTSL label
     "npat": "npat",
     "pat": "npat",
     "gpmargin": "gp_margin",
@@ -51,7 +60,8 @@ LABEL_KEYS = {
 
 EXEC_METRICS = [
     "revenue", "operating_cost", "ebitda", "dep_amort", "ebit", "net_finance_cost",
-    "other_income", "taxation", "npat", "ebitda_margin", "ebit_margin", "npat_margin",
+    "other_income", "taxation", "npat",
+    "ebitda_margin", "ebit_margin", "npat_margin",
 ]
 FIN_AMOUNT_METRICS = [
     "revenue", "direct_cost", "gross_profit", "selling_admin", "ebitda",
@@ -266,83 +276,350 @@ def _read_fin_tab(ws, warnings: List[str]) -> Dict[str, Dict[str, Dict[str, Dict
     return {"ytd": ytd, "month": month}
 
 
-def _read_slts_tab(wb, period: Period, warnings: List[str]) -> Dict[str, Optional[float]]:
-    """
-    SLTS YTD actuals from the 'For the Period of <Mon> <Year>' column of the SLTSL tab,
-    restated into the Executive Summary layout.
-    """
-    empty = {m: None for m in EXEC_METRICS + ["exchange_gain"]}
-    ws = next((s for s in wb.worksheets if _norm(s.title) == "sltsl"), None)
-    if ws is None:
-        warnings.append("SLTSL tab not found - the SLTS slide was left blank.")
-        return empty
+# ---------------------------------------------------------------------------
+# SLTS column offset mapping for INCOME Amalg Board Pack Slides block
+# Col 36 = SLTS Amalgamated (2026 Actual), col 37 = 2025 LY
+# ---------------------------------------------------------------------------
+_SLTS_AMALG_ACT_OFFSET = 0   # col 36 relative to first SLTS col
+_SLTS_AMALG_LY_OFFSET  = 1   # col 37 relative to first SLTS col
 
-    header_row = col = None
-    header_text = ""
+
+def _find_slts_col(ws) -> Optional[int]:
+    """Return the column index of the SLTS Amalgamated (2026 actual) in INCOME Amalg."""
     for r in range(1, min(ws.max_row, 15) + 1):
         for c in range(1, ws.max_column + 1):
-            text = str(_cell(ws, r, c) or "")
-            if _norm(text).startswith("fortheperiodof"):
-                header_row, col, header_text = r, c, text
+            text = _norm(str(_cell(ws, r, c) or ""))
+            if "sltsamalgamated" in text or ("donotenter" in text and "sltsamalgamated" in text):
+                return c
+    return None
+
+
+def _read_slts_exec(
+    wb,
+    fin_ws,
+    period: Period,
+    warnings: List[str],
+) -> Dict[str, Dict[str, Dict[str, object]]]:
+    """
+    Build the full Executive Summary data structure for SLTS (equivalent to what
+    _read_exec_tab produces for Group / SLT / Mobitel), drawing from three sources:
+
+      • INCOME Amalg YTD tab  – YTD and Month actuals (col 36) and last-year (col 37)
+      • SLTSL tab             – YTD budget ('For the Period of ...' column)
+
+    The Month Budget is derived as SLTSL YTD budget ÷ period.month so that it is
+    consistent with the annual budget pro-rated to the number of months elapsed.
+    """
+    def _empty_block(fields):
+        return {m: {f: None for f in fields} for m in EXEC_METRICS}
+
+    empty_ytd   = _empty_block(["act", "ly", "var_ly", "pct_ly", "bud", "var_bud", "pct_bud"])
+    empty_month = _empty_block(["act", "bud", "var_bud", "pct_bud"])
+    empty_result = {"ytd": empty_ytd, "month": empty_month}
+
+    # ── Step 1: locate SLTS Amalgamated column in INCOME Amalg tab ──────────
+    slts_act_col = _find_slts_col(fin_ws)
+    if slts_act_col is None:
+        warnings.append(
+            "INCOME Amalg: SLTS Amalgamated column not found – SLTS slide left blank."
+        )
+        return empty_result
+    slts_ly_col = slts_act_col + 1  # col 37 = 2025 LY
+
+    # ── Step 2: locate the Board Pack Slides block and Month block ───────────
+    bp_anchor = _find_row(fin_ws, lambda v: _norm(v) == "boardpackslides")
+    if bp_anchor is None:
+        warnings.append("INCOME Amalg: 'Board Pack Slides' row not found – SLTS slide left blank.")
+        return empty_result
+
+    ytd_end   = _block_end(fin_ws, bp_anchor, "pat")
+    ytd_rows  = _label_rows(fin_ws, bp_anchor, ytd_end)
+
+    # Also scan main P&L section (above Board Pack Slides) for exchange_gain / other_income
+    # These rows are not repeated in the Board Pack Slides block for SLTS.
+    main_rows = _label_rows(fin_ws, 1, bp_anchor - 1)
+
+    month_anchor = _find_row(
+        fin_ws, lambda v: _norm(str(v or "")).startswith("month"), ytd_end
+    )
+    if month_anchor is None:
+        warnings.append("INCOME Amalg: 'Month ...' block not found – SLTS month data left blank.")
+        month_rows = {}
+    else:
+        month_end  = _find_row(fin_ws, lambda v: _norm(v) == "pat", month_anchor)
+        month_end  = month_end or (month_anchor + 30)
+        month_rows = _label_rows(fin_ws, month_anchor, month_end)
+
+    # ── Step 3: read YTD Budget from SLTSL tab ──────────────────────────────
+    ws_sltsl = next((s for s in wb.worksheets if _norm(s.title) == "sltsl"), None)
+    ytd_bud: Dict[str, Optional[float]] = {m: None for m in EXEC_METRICS}
+    if ws_sltsl is None:
+        warnings.append("SLTSL tab not found – SLTS YTD budget left blank.")
+    else:
+        # Locate 'For the Period of ...' column header (usually row 6, some col)
+        bud_col = bud_hdr = bud_hdr_row = None
+        for r in range(1, min(ws_sltsl.max_row, 12) + 1):
+            for c in range(1, ws_sltsl.max_column + 1):
+                text = str(_cell(ws_sltsl, r, c) or "")
+                if _norm(text).startswith("fortheperiodof"):
+                    bud_col, bud_hdr, bud_hdr_row = c, text, r
+                    break
+            if bud_col:
                 break
-        if col:
-            break
-    if col is None:
-        warnings.append("SLTSL: 'For the Period of ...' column not found - the SLTS slide was left blank.")
-        return empty
 
-    stated = _parse_period(re.sub(r"(?i)^\s*for the period of\s*", "", header_text))
-    if stated and (stated.month, stated.year) != (period.month, period.year):
-        warnings.append(f"SLTSL: column is '{header_text}' but the board pack period is {period.label}.")
+        if bud_col is None:
+            warnings.append("SLTSL: 'For the Period of ...' column not found – SLTS YTD budget left blank.")
+        else:
+            stated = _parse_period(re.sub(r"(?i)^\s*for the period of\s*", "", bud_hdr))
+            if stated and (stated.month, stated.year) != (period.month, period.year):
+                warnings.append(
+                    f"SLTSL: column is '{bud_hdr}' but the board pack period is {period.label}."
+                )
 
-    rows: Dict[str, int] = {}
-    for r in range(header_row + 1, ws.max_row + 1):
-        label = _norm(_cell(ws, r, 2))
-        if label and label not in rows:
-            rows[label] = r
+            # Build row-label map from column B (SLTSL uses col B for labels)
+            sltsl_rows: Dict[str, int] = {}
+            for r in range(bud_hdr_row + 1, ws_sltsl.max_row + 1):
+                lbl = _norm(_cell(ws_sltsl, r, 2))
+                if lbl and lbl not in sltsl_rows:
+                    sltsl_rows[lbl] = r
 
-    def val(label: str) -> float:
-        r = rows.get(label)
-        v = _cell(ws, r, col) if r else None
-        if r is None or not isinstance(v, (int, float)):
-            raise BoardPackError(f"SLTSL: '{label}' has no numeric value in column {header_text!r}.")
-        return float(v)
+            def _sltsl_val(label: str) -> Optional[float]:
+                r = sltsl_rows.get(label)
+                if r is None:
+                    return None
+                v = _cell(ws_sltsl, r, bud_col)
+                return float(v) if isinstance(v, (int, float)) else None
+
+            try:
+                bud_rev  = _sltsl_val("revenue")
+                bud_dc   = _sltsl_val("directcosts")
+                bud_opex = _sltsl_val("opex")
+                bud_ebitda = _sltsl_val("ebitda")
+                bud_dep  = _sltsl_val("depreciationamortization")
+                bud_ebit = _sltsl_val("operatingprofit")  # 'Operating Profit' in SLTSL
+                bud_nfc  = _sltsl_val("interestincomecost")
+                bud_exch = _sltsl_val("exchangegainloss")
+                bud_other = _sltsl_val("nonoperatingincome")
+                bud_tax  = _sltsl_val("incometax")
+                bud_pat  = _sltsl_val("pat")
+
+                # SLTSL uses Direct Costs + OPEX = total operating cost
+                bud_opex_total = None
+                if bud_dc is not None and bud_opex is not None:
+                    bud_opex_total = bud_dc + bud_opex
+                elif bud_dc is not None:
+                    bud_opex_total = bud_dc
+
+                def _marg(num, denom):
+                    if num is None or denom is None or denom == 0:
+                        return "#DIV/0!"
+                    return num / denom
+
+                # SLTSL costs (direct_cost, opex, dep, tax) are already stored as negative
+                # values in the SLTSL sheet, so use them directly without additional negation.
+                ytd_bud["revenue"]          = bud_rev
+                ytd_bud["operating_cost"]   = bud_opex_total  # already negative
+                ytd_bud["ebitda"]           = bud_ebitda
+                ytd_bud["dep_amort"]        = bud_dep         # already negative
+                ytd_bud["ebit"]             = bud_ebit
+                ytd_bud["net_finance_cost"]  = bud_nfc
+                ytd_bud["exchange_gain"]    = bud_exch
+                ytd_bud["other_income"]     = bud_other
+                ytd_bud["taxation"]         = bud_tax
+                ytd_bud["npat"]             = bud_pat
+                ytd_bud["ebitda_margin"]   = _marg(bud_ebitda, bud_rev)
+                ytd_bud["ebit_margin"]     = _marg(bud_ebit, bud_rev)
+                ytd_bud["npat_margin"]     = _marg(bud_pat, bud_rev)
+            except Exception as exc:  # pragma: no cover
+                warnings.append(f"SLTSL budget read error: {exc} – SLTS YTD budget left blank.")
+
+    # ── Step 4: assemble the exec data structure ─────────────────────────────
+    months_elapsed = period.month  # e.g. 8 for August
+
+    def _amalg_val(rows_map, metric, col_offset):
+        """Read a single metric from INCOME Amalg using the SLTS col + offset."""
+        r = rows_map.get(metric)
+        if r is None:
+            return None
+        col = slts_act_col + col_offset
+        v = _cell(fin_ws, r, col)
+        return float(v) if isinstance(v, (int, float)) else None
+
+    def _build_ytd():
+        result: Dict[str, Dict[str, object]] = {}
+
+        # Metrics read directly from INCOME Amalg SLTS column
+        direct_metrics = [
+            "revenue", "ebitda", "dep_amort", "ebit",
+            "net_finance_cost", "taxation", "npat",
+        ]
+
+        for metric in EXEC_METRICS:
+            if metric.endswith("_margin"):
+                result.setdefault(metric, {"act": None, "ly": None, "var_ly": None,
+                                           "pct_ly": None, "bud": None, "var_bud": None,
+                                           "pct_bud": None})
+                continue
+
+            if metric == "operating_cost":
+                # INCOME Amalg SLTS uses positive cost rows; negate to match sign convention
+                dc_act  = _amalg_val(ytd_rows, "direct_cost",  _SLTS_AMALG_ACT_OFFSET)
+                sa_act  = _amalg_val(ytd_rows, "selling_admin", _SLTS_AMALG_ACT_OFFSET)
+                dc_ly   = _amalg_val(ytd_rows, "direct_cost",  _SLTS_AMALG_LY_OFFSET)
+                sa_ly   = _amalg_val(ytd_rows, "selling_admin", _SLTS_AMALG_LY_OFFSET)
+                # Store as negative (costs shown as (x) in the slide)
+                raw_act = (dc_act + sa_act) if dc_act is not None and sa_act is not None else None
+                raw_ly  = (dc_ly  + sa_ly)  if dc_ly  is not None and sa_ly  is not None else None
+                act = (-raw_act) if raw_act is not None else None
+                ly  = (-raw_ly)  if raw_ly  is not None else None
+            elif metric == "dep_amort":
+                # Dep & Amort is positive in INCOME Amalg SLTS; negate to show as (x)
+                raw_act = _amalg_val(ytd_rows, "dep_amort", _SLTS_AMALG_ACT_OFFSET)
+                raw_ly  = _amalg_val(ytd_rows, "dep_amort", _SLTS_AMALG_LY_OFFSET)
+                act = (-raw_act) if raw_act is not None else None
+                ly  = (-raw_ly)  if raw_ly  is not None else None
+            elif metric == "ebit":
+                # SLTS Executive Summary slide maps 'EBIT' to Operating Profit (EBITDA - Dep)
+                # not to the actual EBIT row (which includes other adjustments).
+                # Row 67 in INCOME Amalg SLTS = 'Operating profit' = EBITDA - Dep & Amort
+                act = _amalg_val(ytd_rows, "operating_profit", _SLTS_AMALG_ACT_OFFSET)
+                ly  = _amalg_val(ytd_rows, "operating_profit", _SLTS_AMALG_LY_OFFSET)
+            elif metric == "other_income":
+                # INCOME Amalg Board Pack Slides SLTS block doesn't have Other Income;
+                # read from the main P&L section above the Board Pack Slides anchor.
+                act = _amalg_val(main_rows, "other_income", _SLTS_AMALG_ACT_OFFSET)
+                ly  = _amalg_val(main_rows, "other_income", _SLTS_AMALG_LY_OFFSET)
+            elif metric == "exchange_gain":
+                # Same: exchange gain is only in the main P&L section.
+                act = _amalg_val(main_rows, "exchange_gain", _SLTS_AMALG_ACT_OFFSET)
+                ly  = _amalg_val(main_rows, "exchange_gain", _SLTS_AMALG_LY_OFFSET)
+            elif metric in direct_metrics:
+                act = _amalg_val(ytd_rows, metric, _SLTS_AMALG_ACT_OFFSET)
+                ly  = _amalg_val(ytd_rows, metric, _SLTS_AMALG_LY_OFFSET)
+            else:
+                act = ly = None
+
+            bud = ytd_bud.get(metric)
+            var_ly  = (act - ly)  if act is not None and ly  is not None else None
+            pct_ly  = (var_ly / abs(ly)) if var_ly is not None and ly  not in (None, 0) else (
+                "#DIV/0!" if ly == 0 else None
+            )
+            var_bud = (act - bud) if act is not None and bud is not None else None
+            pct_bud = (var_bud / abs(bud)) if var_bud is not None and bud not in (None, 0) else (
+                "#DIV/0!" if bud == 0 else None
+            )
+            result[metric] = {
+                "act": act, "ly": ly, "var_ly": var_ly, "pct_ly": pct_ly,
+                "bud": bud, "var_bud": var_bud, "pct_bud": pct_bud,
+            }
+
+        # Compute margin rows from assembled amounts
+        rev_d = result.get("revenue", {})
+        for marg_key, num_key in (
+            ("ebitda_margin", "ebitda"), ("ebit_margin", "ebit"), ("npat_margin", "npat")
+        ):
+            nd = result.get(num_key, {})
+
+            def _m(n, d, _nd=nd, _rev=rev_d):
+                if n is None or d is None or d == 0:
+                    return "#DIV/0!" if d == 0 else None
+                return n / d
+
+            act_m  = _m(nd.get("act"),  rev_d.get("act"))
+            ly_m   = _m(nd.get("ly"),   rev_d.get("ly"))
+            bud_m  = ytd_bud.get(marg_key)
+            var_ly_m  = (act_m  - ly_m)  if isinstance(act_m,  float) and isinstance(ly_m,  float) else None
+            var_bud_m = (act_m  - bud_m) if isinstance(act_m,  float) and isinstance(bud_m, float) else None
+            result[marg_key] = {
+                "act": act_m, "ly": ly_m, "var_ly": None, "pct_ly": var_ly_m,
+                "bud": bud_m, "var_bud": None, "pct_bud": var_bud_m,
+            }
+        # exchange_gain is SLTS-only (not in EXEC_METRICS). Add it separately.
+        eg_act = _amalg_val(main_rows, "exchange_gain", _SLTS_AMALG_ACT_OFFSET)
+        eg_ly  = _amalg_val(main_rows, "exchange_gain", _SLTS_AMALG_LY_OFFSET)
+        eg_bud = ytd_bud.get("exchange_gain")
+        eg_var_ly  = (eg_act - eg_ly)  if eg_act is not None and eg_ly  is not None else None
+        eg_pct_ly  = (eg_var_ly / abs(eg_ly)) if eg_var_ly is not None and eg_ly not in (None, 0) else None
+        eg_var_bud = (eg_act - eg_bud) if eg_act is not None and eg_bud is not None else None
+        eg_pct_bud = (eg_var_bud / abs(eg_bud)) if eg_var_bud is not None and eg_bud not in (None, 0) else None
+        result["exchange_gain"] = {
+            "act": eg_act, "ly": eg_ly, "var_ly": eg_var_ly, "pct_ly": eg_pct_ly,
+            "bud": eg_bud, "var_bud": eg_var_bud, "pct_bud": eg_pct_bud,
+        }
+        return result
+
+    def _build_month():
+        result: Dict[str, Dict[str, object]] = {}
+
+        direct_metrics = [
+            "revenue", "ebitda", "dep_amort", "ebit",
+            "net_finance_cost", "taxation", "npat",
+        ]
+
+        for metric in EXEC_METRICS:
+            if metric.endswith("_margin"):
+                result.setdefault(metric, {"act": None, "bud": None, "var_bud": None, "pct_bud": None})
+                continue
+
+            if metric == "operating_cost":
+                dc_act = _amalg_val(month_rows, "direct_cost",  _SLTS_AMALG_ACT_OFFSET)
+                sa_act = _amalg_val(month_rows, "selling_admin", _SLTS_AMALG_ACT_OFFSET)
+                raw_act = (dc_act + sa_act) if dc_act is not None and sa_act is not None else None
+                act = (-raw_act) if raw_act is not None else None
+            elif metric == "dep_amort":
+                raw_act = _amalg_val(month_rows, "dep_amort", _SLTS_AMALG_ACT_OFFSET)
+                act = (-raw_act) if raw_act is not None else None
+            elif metric == "ebit":
+                # Map to operating_profit row, same as YTD
+                act = _amalg_val(month_rows, "operating_profit", _SLTS_AMALG_ACT_OFFSET)
+            elif metric in ("other_income", "exchange_gain"):
+                # Read from main P&L section, not from Board Pack Slides SLTS block
+                act = _amalg_val(main_rows, metric, _SLTS_AMALG_ACT_OFFSET)
+            elif metric in direct_metrics:
+                act = _amalg_val(month_rows, metric, _SLTS_AMALG_ACT_OFFSET)
+            else:
+                act = None
+
+            # Month budget = YTD budget / months elapsed (pro-rated)
+            ytd_b = ytd_bud.get(metric)
+            bud = (ytd_b / months_elapsed) if ytd_b is not None and months_elapsed else None
+
+            var_bud = (act - bud) if act is not None and bud is not None else None
+            pct_bud = (var_bud / abs(bud)) if var_bud is not None and bud not in (None, 0) else (
+                "#DIV/0!" if bud == 0 else None
+            )
+            result[metric] = {"act": act, "bud": bud, "var_bud": var_bud, "pct_bud": pct_bud}
+
+        # Compute margin rows for month block
+        rev_d = result.get("revenue", {})
+        for marg_key, num_key in (
+            ("ebitda_margin", "ebitda"), ("ebit_margin", "ebit"), ("npat_margin", "npat")
+        ):
+            nd = result.get(num_key, {})
+
+            def _m(n, d, _nd=nd, _rev=rev_d):
+                if n is None or d is None or d == 0:
+                    return "#DIV/0!" if d == 0 else None
+                return n / d
+
+            act_m = _m(nd.get("act"), rev_d.get("act"))
+            bud_m = _m(nd.get("bud"), rev_d.get("bud"))
+            var_m = (act_m - bud_m) if isinstance(act_m, float) and isinstance(bud_m, float) else None
+            result[marg_key] = {"act": act_m, "bud": bud_m, "var_bud": None, "pct_bud": var_m}
+        # exchange_gain: no monthly block row in INCOME Amalg SLTS; leave act as None
+        eg_act = None
+        eg_bud_ytd = ytd_bud.get("exchange_gain")
+        eg_bud_m = (eg_bud_ytd / months_elapsed) if eg_bud_ytd is not None and months_elapsed else None
+        eg_var = (eg_act - eg_bud_m) if eg_act is not None and eg_bud_m is not None else None
+        eg_pct = (eg_var / abs(eg_bud_m)) if eg_var is not None and eg_bud_m not in (None, 0) else None
+        result["exchange_gain"] = {"act": eg_act, "bud": eg_bud_m, "var_bud": eg_var, "pct_bud": eg_pct}
+        return result
 
     try:
-        revenue = val("revenue")
-        opex = val("directcosts") + val("opex")
-        ebitda = val("ebitda")
-        dep = val("depreciationamortization")
-        interest = val("interestincomecost")
-        exchange = val("exchangegainloss")
-        other = val("nonoperatingincome")
-        tax = val("incometax")
-        pbt = val("pbt")
-        pat = val("pat")
+        return {"ytd": _build_ytd(), "month": _build_month()}
     except BoardPackError as exc:
-        warnings.append(f"{exc} The SLTS slide was left blank.")
-        return empty
-
-    ebit = pbt - interest
-
-    def margin(x: float):
-        return x / revenue if revenue else "#DIV/0!"
-
-    return {
-        "revenue": revenue,
-        "operating_cost": -opex,
-        "ebitda": ebitda,
-        "dep_amort": -dep,
-        "ebit": ebit,
-        "net_finance_cost": interest,
-        "exchange_gain": exchange,
-        "other_income": other,
-        "taxation": tax,
-        "npat": pat,
-        "ebitda_margin": margin(ebitda),
-        "ebit_margin": margin(ebit),
-        "npat_margin": margin(pat),
-    }
+        warnings.append(f"{exc} SLTS slide left blank.")
+        return empty_result
 
 
 def read_board_pack_workbook(file_path: str) -> BoardPackData:
@@ -377,15 +654,22 @@ def read_board_pack_workbook(file_path: str) -> BoardPackData:
         )
 
     warnings: List[str] = []
+    exec_data = _read_exec_tab(exec_ws, warnings)
+
+    # Read SLTS full exec data and merge into exec dict
+    slts_exec = _read_slts_exec(wb, fin_ws, period, warnings)
+    exec_data["SLTS"] = slts_exec
+
     data = BoardPackData(
         period=period,
-        exec=_read_exec_tab(exec_ws, warnings),
+        exec=exec_data,
         fin=_read_fin_tab(fin_ws, warnings),
-        slts={},
+        slts={},  # kept for backward compatibility; SLTS data now lives in exec["SLTS"]
         sheets_used=[fin_ws.title, exec_ws.title],
         warnings=warnings,
     )
-    data.slts = _read_slts_tab(wb, period, warnings)
-    if data.slts.get("revenue") is not None:
+    # Mark SLTSL as used if we got at least revenue YTD actuals
+    slts_rev = slts_exec.get("ytd", {}).get("revenue", {}).get("act")
+    if slts_rev is not None:
         data.sheets_used.append("SLTSL")
     return data
