@@ -40,7 +40,7 @@ EXEC_COLUMNS = {
 PCT_FIELDS = {"pct_bud", "pct_ly", "pct"}
 
 
-# ─── Number formatting (matches the board pack: 1,234  (18)  -6.00%  #DIV/0!) ──
+# ─── Number formatting (matches the board pack: 1,234  (18)  -  (6.5%)) ──────
 
 def _round(value: float, places: int) -> Decimal:
     quantum = Decimal(1).scaleb(-places)
@@ -53,26 +53,37 @@ def format_amount(value) -> str:
     if isinstance(value, str):
         return value
     if value == 0:
-        return "0"
+        return "-"
     rounded = _round(abs(value), 0)
     text = f"{rounded:,.0f}"
     return f"({text})" if value < 0 else text
 
 
-def format_pct(value) -> str:
+def format_pct(value, decimals: int = 1) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value
-    rounded = _round(value * 100, 2)
-    if rounded == 0 and value < 0:
-        return "-0.00%"
-    return f"{rounded:.2f}%"
+        # Excel errors such as #DIV/0! show as 0% in the board pack
+        value = 0.0
+    text = f"{_round(abs(value) * 100, decimals):.{decimals}f}%"
+    return f"({text})" if value < 0 else text
 
 
-def _format(metric: str, field: str, value) -> str:
+def _pct_decimals(style: str, metric: str, block: str, field: str) -> int:
+    """Decimal places the board pack uses for a percentage cell."""
+    margin = metric.endswith("_margin")
+    if style == "exec":
+        return 0 if field == "pct_ly" and not margin else 1
+    if style == "slts":
+        if not margin:
+            return 0
+        return 0 if block == "month" and field in PCT_FIELDS else 2
+    return 1
+
+
+def _format(metric: str, field: str, value, style: str = "fin", block: str = "") -> str:
     if field in PCT_FIELDS or metric.endswith("_margin"):
-        return format_pct(value)
+        return format_pct(value, _pct_decimals(style, metric, block, field))
     return format_amount(value)
 
 
@@ -182,13 +193,14 @@ def _relabel_period(prs, period: Period):
 
 # ─── Slide fillers ───────────────────────────────────────────────────────────
 
-def _fill_exec_slide(slide, values: Dict[str, Dict[str, Dict[str, object]]]):
+def _fill_exec_slide(slide, values: Dict[str, Dict[str, Dict[str, object]]], style: str):
     table = _table(slide)
 
     def fill(metric: str, r: int):
         for c, (block, field) in EXEC_COLUMNS.items():
             if metric in values[block]:
-                _set_cell_text(table.cell(r, c), _format(metric, field, values[block][metric].get(field)))
+                text = _format(metric, field, values[block][metric].get(field), style, block)
+                _set_cell_text(table.cell(r, c), text)
 
     _fill_rows(table, fill)
 
@@ -231,7 +243,7 @@ def generate_board_pack(data: BoardPackData, output_dir: str, template_path: Opt
     slides = list(prs.slides)
 
     for index, entity in EXEC_SLIDES.items():
-        _fill_exec_slide(slides[index], data.exec[entity])
+        _fill_exec_slide(slides[index], data.exec[entity], "slts" if entity == "SLTS" else "exec")
     for index, (block, left, right) in FIN_PAIR_SLIDES.items():
         _fill_fin_pair_slide(slides[index], data.fin[block][left], data.fin[block][right])
     ytd = data.fin["ytd"]

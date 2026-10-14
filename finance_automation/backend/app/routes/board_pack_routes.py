@@ -15,6 +15,7 @@ from app.routes.use_case_routes import require_use_case
 from app.services.audit_logger import log_audit
 from config import settings
 from services.board_pack_generator import generate_board_pack
+from services.board_pack_history import load_snapshot, save_snapshot
 from services.board_pack_reader import BoardPackError, read_board_pack_workbook
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,15 @@ board_pack_router = APIRouter(prefix="/api/board-pack", tags=["board-pack"])
 
 UPLOAD_DIR = settings.UPLOAD_DIR / "board_pack"
 OUTPUT_DIR = settings.OUTPUT_DIR / "board_pack"
+HISTORY_DIR = OUTPUT_DIR / "history"
 FILENAME_PATTERN = re.compile(r"^Finance_Board_Pack_[A-Za-z]+_\d{4}_[0-9a-f]{8}\.pptx$")
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
 def _build(file_path: Path):
-    data = read_board_pack_workbook(str(file_path))
+    data = read_board_pack_workbook(str(file_path), lambda period: load_snapshot(HISTORY_DIR, period))
     output_path = generate_board_pack(data, str(OUTPUT_DIR))
+    save_snapshot(HISTORY_DIR, data.period, data.snapshot)
     return data, Path(output_path)
 
 
