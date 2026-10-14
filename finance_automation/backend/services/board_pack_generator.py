@@ -22,8 +22,7 @@ from utils.logger import logger
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "board_pack_templates" / "board_pack_template.pptx"
 
 # Template slide index (0-based) -> what fills it
-EXEC_SLIDES = {0: "Group", 1: "SLT", 2: "Mobitel"}
-SLTS_SLIDE = 3
+EXEC_SLIDES = {0: "Group", 1: "SLT", 2: "Mobitel", 3: "SLTS"}
 FIN_PAIR_SLIDES = {
     4: ("ytd", "SLT", "Group"),
     5: ("ytd", "SLT", "Mobitel"),
@@ -106,11 +105,20 @@ def _set_cell_text(cell, text: str):
     if source is not None:
         rpr = copy.deepcopy(source)
         rpr.tag = qn("a:rPr")
+        sz = rpr.get("sz")
+        if sz is not None and int(sz) > 1200:
+            rpr.set("sz", "1200")
+        run.append(rpr)
+    else:
+        rpr = run.makeelement(qn("a:rPr"), {"sz": "1200"})
         run.append(rpr)
     t = run.makeelement(qn("a:t"), {})
     t.text = text
     run.append(t)
     if end_rpr is not None:
+        end_sz = end_rpr.get("sz")
+        if end_sz is not None and int(end_sz) > 1200:
+            end_rpr.set("sz", "1200")
         end_rpr.addprevious(run)
     else:
         p.append(run)
@@ -186,12 +194,8 @@ def _fill_exec_slide(slide, values: Dict[str, Dict[str, Dict[str, object]]]):
 
 
 def _fill_slts_slide(slide, slts: Dict[str, Optional[float]]):
-    table = _table(slide)
-
-    def fill(metric: str, r: int):
-        _set_cell_text(table.cell(r, 7), _format(metric, "act", slts.get(metric)))
-
-    _fill_rows(table, fill)
+    """Legacy filler kept for backward compatibility; SLTS now uses _fill_exec_slide."""
+    pass
 
 
 def _fill_fin_pair_slide(slide, left: Dict, right: Dict):
@@ -228,7 +232,6 @@ def generate_board_pack(data: BoardPackData, output_dir: str, template_path: Opt
 
     for index, entity in EXEC_SLIDES.items():
         _fill_exec_slide(slides[index], data.exec[entity])
-    _fill_slts_slide(slides[SLTS_SLIDE], data.slts)
     for index, (block, left, right) in FIN_PAIR_SLIDES.items():
         _fill_fin_pair_slide(slides[index], data.fin[block][left], data.fin[block][right])
     ytd = data.fin["ytd"]
