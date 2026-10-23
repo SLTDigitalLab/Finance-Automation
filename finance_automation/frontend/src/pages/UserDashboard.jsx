@@ -43,7 +43,6 @@ import {
   QueryStats as ForecastIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
-  Assessment as FinancialAnalysisIcon,
   AccountBalanceWallet as PLIcon,
   TableChart as TableIcon,
   InfoOutlined as InfoIcon,
@@ -94,7 +93,6 @@ const NAV_ITEMS = [
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
-  { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

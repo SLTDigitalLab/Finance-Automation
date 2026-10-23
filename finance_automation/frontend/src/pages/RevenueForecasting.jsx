@@ -52,7 +52,6 @@ import {
   RestartAlt as ResetIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
-  Assessment as FinancialAnalysisIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -73,7 +72,6 @@ const NAV_ITEMS = [
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting", active: true },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
-  { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

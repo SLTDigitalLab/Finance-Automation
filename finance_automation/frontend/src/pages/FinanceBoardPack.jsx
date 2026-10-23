@@ -24,7 +24,6 @@ import {
   QueryStats as ForecastIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
-  Assessment as FinancialAnalysisIcon,
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
 } from "@mui/icons-material";
@@ -48,7 +47,6 @@ const NAV_ITEMS = [
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack", active: true },
-  { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
