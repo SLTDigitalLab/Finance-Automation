@@ -193,6 +193,40 @@ class PLRevenueRecord(Base):
 
 
 
+class FATrialBalance(Base):
+    """One loaded trial balance per month-end for the Financial Analysis Report. Reloading a month replaces it."""
+    __tablename__ = "fa_trial_balances"
+    __table_args__ = (
+        UniqueConstraint("period_year", "period_month", name="uq_fa_trial_balances_period"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    period_year = Column(Integer, nullable=False)
+    period_month = Column(Integer, nullable=False)  # 1-12
+    source_filename = Column(String, nullable=True)
+    row_count = Column(Integer, nullable=False)     # rows in the file
+    account_count = Column(Integer, nullable=False)
+    net_ytd = Column(Float, nullable=False)         # should be ~0 for a balanced TB
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class FATrialBalanceAccount(Base):
+    """A trial balance summed to natural account (rupees, debit positive)."""
+    __tablename__ = "fa_trial_balance_accounts"
+    __table_args__ = (
+        UniqueConstraint("trial_balance_id", "account", name="uq_fa_trial_balance_accounts_tb_account"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    trial_balance_id = Column(Integer, ForeignKey("fa_trial_balances.id"), nullable=False, index=True)
+    account = Column(Integer, nullable=False)
+    account_name = Column(String, nullable=True)
+    beginning_balance = Column(Float, default=0.0)
+    period_activity = Column(Float, default=0.0)
+    ytd_balance = Column(Float, default=0.0)
+
+
 class UserUseCaseAccess(Base):
     """Which finance use case(s) an email may open. Keyed by email so access can be granted before first login."""
     __tablename__ = "user_use_case_access"
