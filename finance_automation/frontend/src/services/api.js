@@ -796,3 +796,71 @@ export async function downloadBoardPack(filename) {
   URL.revokeObjectURL(localUrl);
 }
 
+// Financial Analysis Report
+export async function getFinancialAnalysisStatus() {
+  const response = await fetch(`${API_BASE}/financial-analysis/status`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Unable to load the trial balances");
+}
+
+export async function uploadTrialBalances(files) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+
+  const response = await fetch(`${API_BASE}/financial-analysis/trial-balances`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to upload the trial balances");
+}
+
+export async function deleteTrialBalance(year, month) {
+  const response = await fetch(`${API_BASE}/financial-analysis/trial-balances/${year}/${month}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to remove the trial balance");
+}
+
+export async function uploadGlMapping(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/financial-analysis/mapping`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to upload the GL code mapping");
+}
+
+export async function generateFinancialAnalysis(year, quarter) {
+  const response = await fetch(`${API_BASE}/financial-analysis/generate`, {
+    method: "POST",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ year, quarter }),
+  });
+  return safeJsonResponse(response, "Failed to generate the report");
+}
+
+export async function downloadFinancialAnalysis(filename) {
+  const response = await fetch(`${API_BASE}/financial-analysis/download/${encodeURIComponent(filename)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to download the report");
+  }
+
+  const blob = await response.blob();
+  const localUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = localUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(localUrl);
+}
+
