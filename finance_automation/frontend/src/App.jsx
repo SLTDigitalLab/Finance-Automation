@@ -15,7 +15,6 @@ import AuthCallback from "./pages/AuthCallback";
 import RevenueForecasting from "./pages/RevenueForecasting";
 import AnomalyDetection from "./pages/AnomalyDetection";
 import FinanceBoardPack from "./pages/FinanceBoardPack";
-import FinancialAnalysis from "./pages/FinancialAnalysis";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -121,17 +120,6 @@ export default function App() {
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <UseCaseRoute useCase="board_pack">
                   <FinanceBoardPack />
-                </UseCaseRoute>
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/financial-analysis"
-            element={
-              <ProtectedRoute allowedRoles={["User", "Admin"]}>
-                <UseCaseRoute useCase="financial_analysis">
-                  <FinancialAnalysis />
                 </UseCaseRoute>
               </ProtectedRoute>
             }
