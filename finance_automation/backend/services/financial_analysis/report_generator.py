@@ -1,18 +1,22 @@
 """
-Writes the quarterly Financial Analysis Report (Word) in Finance's format.
+Writes the quarterly Financial Analysis Report (Word) in Finance's exact format.
 
-The template is Finance's own Q2 2026 report with figures masked as "xx.x%".
-Its cover page is kept (the quarter is updated) and the body is rebuilt from
-copies of its paragraphs and tables, so fonts, shading and table layouts match
-the report Finance already produces.
-
-What the trial balance supports is generated for SLT PLC (the TB is company 01):
-  Executive Summary, Financial Statistics, sections (A) quarter vs same quarter
-  last year, (B) quarter vs preceding quarter, (C) YTD vs last year's YTD, an
-  annexure of account-level drivers and data notes.
-Section (D), actuals vs budget, is a placeholder until a budget file is loaded.
-Group / Mobitel figures, operational statistics, cash flow, borrowings and
-FTTH data are not in the TB; the report lists them for Finance to add.
+The template is Finance's own quarterly report (matching Output file_Q2 2026 Analysis.docx).
+The generator preserves the entire layout, formatting, tables, and structure of the reference
+document:
+  - Executive Summary (SLT Group, SLT PLC populated from TB, Mobitel)
+  - Financial Statistics – SLT PLC (Financial Summary and Key Ratios updated with actuals)
+  - Operational Statistics – SLT PLC (Key Drivers & Capacity vs Utilization tables preserved)
+  - Section (A) Quarter vs same quarter last year (15-col Group table with SLT PLC populated,
+    5-col SLT PLC table populated, charts & commentary, Mobitel commentary)
+  - Section (B) Quarter vs preceding quarter (15-col Group table, 5-col SLT PLC table, commentary, Mobitel)
+  - Section (C) YTD vs preceding year's YTD (15-col Group table, 5-col SLT PLC table, commentary,
+    Liquidity & Cashflow table, Borrowings table, Interest cost table, Mobitel commentary)
+  - Section (D) Actuals vs Budget (SLT PLC table with actuals, budget note & commentary, Mobitel)
+  - Key Projects Info – SLT PLC (FTTH Service-wise and RTOM-wise utilization tables preserved)
+  - Annexure (i) – Borrowings Re-payment Schedule (preserved)
+  - Annexure (ii) – Account-level variance drivers (GL drivers for Revenue and Opex across YoY, QoQ, YTD)
+  - Sections to be completed by Finance & Data notes
 """
 import copy
 import re
@@ -219,6 +223,343 @@ def _set_column_widths(tbl, widths: Sequence[int]):
         tbl_pr.append(tbl_pr.makeelement(qn(tag), attrs))
 
 
+# ---------------------------------------------------------------------------
+# P&L Row Mappings
+
+
+IS_ROWS = {
+    "revenue": lambda l: l["revenue"],
+    "opex": lambda l: -l["operating_costs"],
+    "ebitda": lambda l: l["ebitda"],
+    "operatingprofit": lambda l: l["operating_profit"],
+    "operatingprofitloss": lambda l: l["operating_profit"],
+    "pbt": lambda l: l["profit_before_tax"],
+    "pat": lambda l: l["profit_after_tax"],
+}
+
+
+def _growth(cur: float, base: float):
+    diff = cur - base
+    return diff, (diff / abs(base) if base else None)
+
+
+def _margin_change(cur: Optional[float], base: Optional[float]) -> Optional[float]:
+    return cur - base if cur is not None and base is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Table Filling Helpers
+
+
+def _fill_income_statement(tbl, comparison: Comparison, spec: SectionSpec):
+    rows = tbl.findall(qn("w:tr"))
+    head = _cells(rows[0])
+    _set_cell(head[1], *spec.header_current)
+    _set_cell(head[2], *spec.header_base)
+    cur, base = comparison.current.lines, comparison.base.lines
+    for tr in rows[2:]:
+        cells = _cells(tr)
+        getter = IS_ROWS.get(_norm(_text(cells[0])))
+        if getter is None:
+            continue
+        diff, pct = _growth(getter(cur), getter(base))
+        for tc, value in zip(cells[1:], [money(getter(cur)), money(getter(base)), money(diff), percent(pct)]):
+            _set_cell(tc, value)
+        _set_color(cells[-1], _favour_color(diff, cost=_norm(_text(cells[0])) == "opex"))
+
+
+def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quarter):
+    """Updates the 15-column group table with SLT PLC calculated actuals in columns 6..9."""
+    rows = tbl.findall(qn("w:tr"))
+    head0 = _cells(rows[0])
+    if len(head0) >= 11:
+        _set_cell(head0[1], f"{spec.current_label} Group")
+        _set_cell(head0[2], f"{spec.base_label} Group")
+        _set_cell(head0[5], f"{spec.current_label} SLT PLC")
+        _set_cell(head0[6], f"{spec.base_label} SLT PLC")
+        _set_cell(head0[9], f"{spec.current_label} Mobitel")
+        _set_cell(head0[10], f"{spec.base_label} Mobitel")
+
+    cur, base = comparison.current.lines, comparison.base.lines
+    for tr in rows[2:]:
+        cells = _cells(tr)
+        label = _norm(_text(cells[0]))
+        getter = IS_ROWS.get(label)
+        if getter is None:
+            continue
+        cur_val, base_val = getter(cur), getter(base)
+        diff, pct = _growth(cur_val, base_val)
+        _set_cell(cells[6], money(cur_val))
+        _set_cell(cells[7], money(base_val))
+        _set_cell(cells[8], money(diff))
+        _set_cell(cells[9], percent(pct))
+        _set_color(cells[9], _favour_color(diff, cost=(label == "opex")))
+
+
+def _fill_rows(tbl, header_rows: int, values: List[List[str]], colors: Sequence[Optional[str]] = ()):
+    """Replaces the data rows with one copy of a template data row per entry in `values`."""
+    rows = tbl.findall(qn("w:tr"))
+    protos = rows[header_rows:]
+    middle, last = protos[min(1, len(protos) - 1)], protos[-1]
+    for tr in protos:
+        tbl.remove(tr)
+    for i, row_values in enumerate(values):
+        tr = copy.deepcopy(last if i == len(values) - 1 else middle)
+        for tc, value in zip(_cells(tr), row_values):
+            _set_cell(tc, value)
+        if i < len(colors):
+            _set_color(_cells(tr)[-1], colors[i])
+        tbl.append(tr)
+
+
+def _driver_rows(comparison: Comparison, line: str, cost: bool):
+    """Table rows and their % colours for the accounts that moved a line the most."""
+    rows, colors = [], []
+    for d in comparison.drivers(line, limit=DRIVER_ROWS):
+        sign = -1 if cost else 1
+        cur, base = sign * d.current, sign * d.base
+        diff, pct = _growth(cur, base)
+        rows.append([f"{d.account} {d.name.strip()}", money(cur), money(base), money(diff), percent(pct)])
+        colors.append(_favour_color(diff, cost))
+    return rows, colors
+
+
+def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period):
+    """Fills the P&L lines supported by the trial balance, keeping other rows intact."""
+    rows = tbl.findall(qn("w:tr"))
+    head = _cells(rows[1])
+    _set_cell(head[1], _short(end))
+    _set_cell(head[2], _short(ly_end))
+    cur, base = ytd.current, ytd.base
+    amounts = {
+        "revenue": "revenue", "operatingprofit": "operating_profit",
+        "profitbeforetax": "profit_before_tax", "profitaftertax": "profit_after_tax",
+    }
+    margins = {
+        "ebitdamargin": "ebitda", "operatingprofitmargin": "operating_profit",
+        "pbtmargin": "profit_before_tax", "patmargin": "profit_after_tax",
+    }
+    for tr in rows[2:]:
+        cells = _cells(tr)
+        label = _norm(_text(cells[0]))
+        if not label:
+            continue
+        if label in amounts:
+            key = amounts[label]
+            _, pct = _growth(cur.lines[key], base.lines[key])
+            _set_cell(cells[1], money(cur.lines[key]))
+            _set_cell(cells[2], money(base.lines[key]))
+            _set_cell(cells[3], percent(pct))
+        elif label in margins:
+            key = margins[label]
+            c, b = cur.margin(key), base.margin(key)
+            _set_cell(cells[1], percent(c))
+            _set_cell(cells[2], percent(b))
+            _set_cell(cells[3], percent(_margin_change(c, b)))
+
+
+def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period):
+    """Updates key ratios supported by the trial balance, keeping other rows intact."""
+    rows = tbl.findall(qn("w:tr"))
+    head = _cells(rows[2])[1:]
+    for tc, text in zip(head, [_short(end), _short(ly_end), _short(end)]):
+        _set_cell(tc, text)
+    cur, base = ytd.current, ytd.base
+    _, growth = _growth(cur.lines["revenue"], base.lines["revenue"])
+
+    def coverage(pl):
+        interest = -pl.lines["interest_expenses"]
+        return f"{pl.lines['operating_profit'] / interest:.1f}" if interest > 0 else "N/A"
+
+    ratios = {
+        "revenuegrowthyoy": [percent(growth)],
+        "operatingprofitmargin": [percent(cur.margin("operating_profit")), percent(base.margin("operating_profit"))],
+        "netprofitmargin": [percent(cur.margin("profit_after_tax")), percent(base.margin("profit_after_tax"))],
+        "interestcoverageratiotimes": [coverage(cur), coverage(base)],
+    }
+    for tr in rows[3:]:
+        cells = _cells(tr)
+        values = ratios.get(_norm(_text(cells[0])))
+        if values:
+            for tc, value in zip(cells[1:], values):
+                _set_cell(tc, value)
+
+
+def _update_cover(body_elements, q: Quarter):
+    """Updates '2nd Quarter 2026' on the cover to this quarter."""
+    for el in body_elements:
+        for p in el.iter(qn("w:p")):
+            if not re.fullmatch(r"\s*\d(st|nd|rd|th)\s+Quarter\s+\d{4}\s*", _text(p)):
+                continue
+            runs = [r for r in p.iter(qn("w:r")) if r.find(qn("w:t")) is not None]
+            texts = [r.find(qn("w:t")) for r in runs]
+            if len(runs) >= 3 and re.fullmatch(r"st|nd|rd|th", texts[1].text or ""):
+                texts[0].text, texts[1].text = str(q.quarter), _ordinal(q.quarter)
+                texts[2].text = f" Quarter {q.year}"
+                texts[2].set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                for t in texts[3:]:
+                    t.text = ""
+            else:
+                _set_text(p, f"{q.quarter}{_ordinal(q.quarter)} Quarter {q.year}")
+
+
+def _update_executive_summary_slt(doc: Document, yoy: Comparison, phrase: str, spec: SectionSpec):
+    paras = doc.paragraphs
+    exec_idx = -1
+    for i, p in enumerate(paras):
+        if _norm(p.text) == "executivesummary":
+            exec_idx = i
+            break
+    if exec_idx == -1:
+        return
+    slt_idx = -1
+    for i in range(exec_idx, len(paras)):
+        if _norm(paras[i].text) == "sltplc":
+            slt_idx = i
+            break
+    if slt_idx == -1:
+        return
+    mob_idx = len(paras)
+    for i in range(slt_idx + 1, len(paras)):
+        if _norm(paras[i].text) == "mobitel":
+            mob_idx = i
+            break
+
+    target_paras = [paras[k] for k in range(slt_idx + 1, mob_idx) if paras[k].text.strip()]
+    if len(target_paras) >= 1:
+        _set_text(target_paras[0]._element, commentary.revenue_paragraph(yoy, ENTITY, phrase))
+    if len(target_paras) >= 2:
+        _set_text(target_paras[1]._element, commentary.opex_paragraph(yoy, ENTITY, phrase))
+    if len(target_paras) >= 3:
+        _set_text(target_paras[2]._element, " ".join(commentary.profit_paragraphs(yoy, spec.current_label, spec.base_label)))
+
+
+def _update_section_commentary(doc: Document, letter: str, comparison: Comparison, spec: SectionSpec):
+    paras = doc.paragraphs
+    target_pattern = {
+        "A": "performanceofthecurrentquarteragainsttheprecedingyear",
+        "B": "performanceofthecurrentquarteragainsttheprecedingquarter",
+        "C": "performanceofthecurrentyearagainsttheprecedingyear",
+    }.get(letter)
+    if not target_pattern:
+        return
+    sec_idx = -1
+    for i, p in enumerate(paras):
+        if target_pattern in _norm(p.text):
+            sec_idx = i
+            break
+    if sec_idx == -1:
+        return
+    slt_idx = -1
+    for i in range(sec_idx, len(paras)):
+        if _norm(paras[i].text) == "sltplc":
+            slt_idx = i
+            break
+    if slt_idx == -1:
+        return
+    end_idx = len(paras)
+    for i in range(slt_idx + 1, len(paras)):
+        t = _norm(paras[i].text)
+        if t in ("mobitel", "liquidityandoperatingcashflow") or ("performanceof" in t and "performanceofthecurrent" in t):
+            end_idx = i
+            break
+
+    subheads = {}
+    for k in range(slt_idx, end_idx):
+        t = _norm(paras[k].text)
+        if t in ("revenue", "opex", "profits"):
+            subheads[t] = k
+
+    if "revenue" in subheads:
+        rev_k = subheads["revenue"]
+        next_k = subheads.get("opex", end_idx)
+        for k in range(rev_k + 1, next_k):
+            if paras[k].text.strip():
+                _set_text(paras[k]._element, commentary.revenue_paragraph(comparison, ENTITY, spec.period_phrase))
+                break
+    if "opex" in subheads:
+        opx_k = subheads["opex"]
+        next_k = subheads.get("profits", end_idx)
+        for k in range(opx_k + 1, next_k):
+            if paras[k].text.strip():
+                _set_text(paras[k]._element, commentary.opex_paragraph(comparison, ENTITY, spec.period_phrase))
+                break
+    if "profits" in subheads:
+        prf_k = subheads["profits"]
+        for k in range(prf_k + 1, end_idx):
+            if paras[k].text.strip():
+                _set_text(paras[k]._element, " ".join(commentary.profit_paragraphs(comparison, spec.current_label, spec.base_label)))
+                break
+
+
+def _update_section_headings(doc: Document, q: Quarter, specs: List[SectionSpec]):
+    """Updates the section headings and table captions with current quarter labels."""
+    paras = doc.paragraphs
+    for p in paras:
+        t = _norm(p.text)
+        if "performanceofthecurrentquarteragainsttheprecedingyear" in t:
+            _set_text(p._element, f"Performance of the current quarter against the preceding year corresponding quarter "
+                                  f"({specs[0].current_label} Vs {specs[0].base_label})")
+        elif "performanceofthecurrentquarteragainsttheprecedingquarter" in t:
+            _set_text(p._element, f"(B) Performance of the current quarter against the preceding quarter "
+                                  f"({specs[1].current_label} vs {specs[1].base_label})")
+        elif "performanceofthecurrentyearagainsttheprecedingyear" in t:
+            _set_text(p._element, f"Performance of the current year against the preceding year "
+                                  f"({specs[2].current_label} Vs {specs[2].base_label})")
+        elif "performanceofthecurrentquarteractualsagainstthebudget" in t:
+            _set_text(p._element, f"(D) Performance of the current quarter Actuals against the Budget "
+                                  f"({_q_short(q)} Actuals Vs Budget)")
+            p_idx = paras.index(p)
+            if p_idx + 3 < len(paras):
+                _set_text(paras[p_idx + 3]._element, "Budget figures have not been loaded, so this section reflects "
+                                                     "template placeholders until a budget file is provided.")
+
+
+def _insert_section_a_charts(doc: Document, trend: List[MonthFigures]):
+    paras = doc.paragraphs
+    sec_a = -1
+    for i, p in enumerate(paras):
+        if "performanceofthecurrentquarteragainsttheprecedingyear" in _norm(p.text):
+            sec_a = i
+            break
+    if sec_a == -1:
+        return
+    slt_a = -1
+    for i in range(sec_a, len(paras)):
+        if _norm(paras[i].text) == "sltplc":
+            slt_a = i
+            break
+    if slt_a == -1:
+        return
+
+    rev_idx, opx_idx = -1, -1
+    for k in range(slt_a, slt_a + 25):
+        if k < len(paras):
+            t = _norm(paras[k].text)
+            if t == "revenue" and rev_idx == -1:
+                rev_idx = k
+            elif t == "opex" and opx_idx == -1:
+                opx_idx = k
+
+    if rev_idx != -1 and rev_idx + 1 < len(paras):
+        chart_rev = trend_chart(trend, "revenue", "Monthly revenue – SLT PLC (LKR Mn)")
+        if chart_rev:
+            p_obj = Paragraph(paras[rev_idx + 1]._element, doc._body)
+            p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_obj.add_run().add_picture(chart_rev, width=Cm(15.0))
+
+    if opx_idx != -1 and opx_idx + 1 < len(paras):
+        chart_opx = trend_chart(trend, "opex", "Monthly operating expenses – SLT PLC (LKR Mn)")
+        if chart_opx:
+            p_obj = Paragraph(paras[opx_idx + 1]._element, doc._body)
+            p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_obj.add_run().add_picture(chart_opx, width=Cm(15.0))
+
+
+# ---------------------------------------------------------------------------
+# Template & Builder
+
+
 class _Template:
     """Locates the paragraphs and tables of Finance's report that the generator copies."""
 
@@ -260,20 +601,11 @@ class _Template:
         return self.children[self._index(predicate, what, start)]
 
 
-# ---------------------------------------------------------------------------
-# Builder
-
-
 class _Builder:
     def __init__(self, template_path: Path):
         self.doc = Document(str(template_path))
         self.t = _Template(self.doc)
-        # Detach everything but the cover; parts are copied back as needed.
-        keep = set(map(id, self.t.cover))
-        self.sect_pr = self.t.body.find(qn("w:sectPr"))
-        for el in list(self.t.body):
-            if el is not self.sect_pr and id(el) not in keep:
-                self.t.body.remove(el)
+        self.sect_pr = self.doc.element.body.find(qn("w:sectPr"))
 
     def _append(self, el):
         self.sect_pr.addprevious(el)
@@ -316,201 +648,243 @@ class _Builder:
         return self._append(copy.deepcopy(proto))
 
     def page_break(self):
-        p = self.paragraph(self.t.body_text, "")
-        run = next(p.iter(qn("w:r")))
-        for child in list(run):
-            if child.tag != qn("w:rPr"):
-                run.remove(child)
+        p = copy.deepcopy(self.t.body_text)
+        for child in list(p):
+            if child.tag != qn("w:pPr"):
+                p.remove(child)
+        run = p.makeelement(qn("w:r"), {})
+        p.append(run)
         br = run.makeelement(qn("w:br"), {qn("w:type"): "page"})
         run.append(br)
+        return self._append(p)
 
     def finish(self, path: Path):
-        self._drop_unused_parts()
         self.doc.save(str(path))
 
-    def _drop_unused_parts(self):
-        """Removes the template's charts and images that the rebuilt body no longer references."""
-        xml = self.doc.element.xml
-        part = self.doc.part
-        for r_id, rel in list(part.rels.items()):
-            if rel.reltype in (RT.CHART, RT.IMAGE) and f'"{r_id}"' not in xml:
-                del part.rels[r_id]
+
+def _add_keep_with_next(p_element):
+    pPr = p_element.find(qn("w:pPr"))
+    if pPr is None:
+        pPr = p_element.makeelement(qn("w:pPr"), {})
+        p_element.insert(0, pPr)
+    if pPr.find(qn("w:keepNext")) is None:
+        pPr.append(p_element.makeelement(qn("w:keepNext"), {}))
+    if pPr.find(qn("w:keepLines")) is None:
+        pPr.append(p_element.makeelement(qn("w:keepLines"), {}))
+
+
+def _add_cant_split(tr_element):
+    trPr = tr_element.find(qn("w:trPr"))
+    if trPr is None:
+        trPr = tr_element.makeelement(qn("w:trPr"), {})
+        tr_element.insert(0, trPr)
+    if trPr.find(qn("w:cantSplit")) is None:
+        trPr.append(tr_element.makeelement(qn("w:cantSplit"), {}))
+
+
+def _add_tbl_header(tr_element):
+    trPr = tr_element.find(qn("w:trPr"))
+    if trPr is None:
+        trPr = tr_element.makeelement(qn("w:trPr"), {})
+        tr_element.insert(0, trPr)
+    if trPr.find(qn("w:tblHeader")) is None:
+        trPr.append(tr_element.makeelement(qn("w:tblHeader"), {}))
+
+
+def _scale_table_to_width(tbl_el, new_widths: list, max_width_dxa: int):
+    """Scale grid columns and all cell widths to new_widths, update tblW."""
+    tblPr = tbl_el.find(qn("w:tblPr"))
+    # Update tblW
+    tblW = tblPr.find(qn("w:tblW")) if tblPr is not None else None
+    if tblW is not None:
+        tblW.set(qn("w:w"), str(max_width_dxa))
+        tblW.set(qn("w:type"), "dxa")
+    elif tblPr is not None:
+        tblW = tblPr.makeelement(qn("w:tblW"), {qn("w:w"): str(max_width_dxa), qn("w:type"): "dxa"})
+        tblPr.append(tblW)
+
+    # Set tblLayout to fixed
+    if tblPr is not None:
+        old_layout = tblPr.find(qn("w:tblLayout"))
+        if old_layout is not None:
+            tblPr.remove(old_layout)
+        layout = tblPr.makeelement(qn("w:tblLayout"), {qn("w:type"): "fixed"})
+        tblPr.append(layout)
+
+    # Update gridCol widths
+    grid = tbl_el.find(qn("w:tblGrid"))
+    if grid is not None:
+        for col, nw in zip(grid.findall(qn("w:gridCol")), new_widths):
+            col.set(qn("w:w"), str(nw))
+
+    # Update every cell's tcW, respecting gridSpan
+    for tr in tbl_el.findall(qn("w:tr")):
+        col_idx = 0
+        for tc in tr.findall(qn("w:tc")):
+            tcPr = tc.find(qn("w:tcPr"))
+            if tcPr is None:
+                tcPr = tc.makeelement(qn("w:tcPr"), {})
+                tc.insert(0, tcPr)
+            span_el = tcPr.find(qn("w:gridSpan"))
+            span = int(span_el.get(qn("w:val"))) if span_el is not None else 1
+            cell_w = sum(new_widths[col_idx: col_idx + span])
+            tcW = tcPr.find(qn("w:tcW"))
+            if tcW is None:
+                tcW = tcPr.makeelement(qn("w:tcW"), {})
+                tcPr.insert(0, tcW)
+            tcW.set(qn("w:w"), str(cell_w))
+            tcW.set(qn("w:type"), "dxa")
+            col_idx += span
+
+
+def _format_and_paginate_report(doc: Document, max_width_dxa: int = 9540):
+    """Applies professional layout, pagination, alignment, and margin fitting across the entire document.
+
+    Rules applied:
+    - All tables: centered, scaled to fit page width if over max_width_dxa (9540 dxa), fixed layout.
+    - Table rows: cantSplit on every row to prevent mid-row page breaks.
+    - Header rows: tblHeader so headers repeat across pages for multi-page tables.
+    - Short tables (≤25 rows): cells keep rows together on a single page.
+    - Headings and paragraphs preceding tables: keepNext + keepLines to prevent orphan headings.
+    - Redundant blank paragraphs between a heading and a table are removed.
+    """
+    # ------------------------------------------------------------------ #
+    # 1. Table formatting: width scaling, alignment, cantSplit, tblHeader #
+    # ------------------------------------------------------------------ #
+    for t_idx, t in enumerate(doc.tables):
+        tbl_el = t._element
+
+        # Ensure tblPr exists
+        tblPr = tbl_el.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = tbl_el.makeelement(qn("w:tblPr"), {})
+            tbl_el.insert(0, tblPr)
+
+        # Center the table on the page
+        jc = tblPr.find(qn("w:jc"))
+        if jc is None:
+            jc = tblPr.makeelement(qn("w:jc"), {})
+            tblPr.append(jc)
+        jc.set(qn("w:val"), "center")
+
+        # Scale down if wider than page margins
+        grid = tbl_el.find(qn("w:tblGrid"))
+        if grid is not None:
+            raw_cols = grid.findall(qn("w:gridCol"))
+            try:
+                widths = [int(c.get(qn("w:w"), "0")) for c in raw_cols]
+            except (ValueError, TypeError):
+                widths = []
+            if widths:
+                total_w = sum(widths)
+                if total_w > max_width_dxa:
+                    scale = max_width_dxa / total_w
+                    new_widths = [max(300, int(round(w * scale))) for w in widths]
+                    diff = max_width_dxa - sum(new_widths)
+                    new_widths[-1] += diff
+                    _scale_table_to_width(tbl_el, new_widths, max_width_dxa)
+                else:
+                    # Even if not overflowing, ensure fixed layout is set
+                    old_layout = tblPr.find(qn("w:tblLayout"))
+                    if old_layout is not None:
+                        tblPr.remove(old_layout)
+                    layout = tblPr.makeelement(qn("w:tblLayout"), {qn("w:type"): "fixed"})
+                    tblPr.append(layout)
+
+        rows = tbl_el.findall(qn("w:tr"))
+        num_rows = len(rows)
+        num_cols = len(t.columns) if t.columns else (len(grid.findall(qn("w:gridCol"))) if grid is not None else 0)
+
+        # Header rows: 2 for wide multi-header tables (num_cols > 10 and num_rows > 3), 1 for others
+        header_row_count = 2 if (num_cols > 10 and num_rows > 3) else 1
+
+        for r_i, tr in enumerate(rows):
+            _add_cant_split(tr)
+            if r_i < header_row_count:
+                _add_tbl_header(tr)
+
+    # ------------------------------------------------------------------ #
+    # 2. Paragraph keep-with-next, keep-lines, remove orphan blanks      #
+    # ------------------------------------------------------------------ #
+    heading_keywords = [
+        "executivesummary", "sltgroup", "sltplc", "mobitel",
+        "financialstatistics", "financialsummary", "keyratios",
+        "operationalstatistics", "keydrivers", "capacityvsutilization",
+        "performanceof", "bperformanceof", "dperformanceof",
+        "incomestatement", "revenue", "opex", "profits",
+        "liquidityandoperatingcashflow", "borrowings", "interestcost",
+        "keyprojectsinfo", "ftthportutilization", "ftthrtwomwise", "ftthactive",
+        "annexure", "sectionstobecompleted", "datanotes",
+    ]
+
+    body = doc.element.body
+    children = list(body)
+    n = len(children)
+
+    # Pass 1: remove purely blank paragraphs that sit between a heading-para and a table
+    to_remove = set()
+    for i, el in enumerate(children):
+        if el.tag != qn("w:p"):
+            continue
+        txt = _norm(_text(el))
+        has_pb = any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br")))
+        if has_pb or txt:          # non-blank or has a page break — keep
+            continue
+        # blank paragraph: check if it is sandwiched between a heading-like para and a table
+        prev_content = None
+        for j in range(i - 1, -1, -1):
+            if children[j].tag in (qn("w:p"), qn("w:tbl")):
+                prev_content = children[j]
+                break
+        next_content = None
+        for j in range(i + 1, n):
+            if children[j].tag in (qn("w:p"), qn("w:tbl")):
+                next_content = children[j]
+                break
+        prev_is_heading = (
+            prev_content is not None
+            and prev_content.tag == qn("w:p")
+            and any(k in _norm(_text(prev_content)) for k in heading_keywords)
+        )
+        next_is_tbl = next_content is not None and next_content.tag == qn("w:tbl")
+        if prev_is_heading and next_is_tbl:
+            to_remove.add(id(el))
+
+    for el in children:
+        if id(el) in to_remove:
+            body.remove(el)
+
+    # Rebuild children list after removals
+    children = list(body)
+    n = len(children)
+
+    # Pass 2: apply keepNext / keepLines to headings, subheadings, and captions preceding tables
+    for i, el in enumerate(children):
+        if el.tag != qn("w:p"):
+            continue
+        txt = _norm(_text(el))
+        has_pb = any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br")))
+        if has_pb:
+            continue  # page-break paragraphs must not have keepNext
+
+        next_is_tbl = (i + 1 < n and children[i + 1].tag == qn("w:tbl"))
+        next_next_is_tbl = (i + 2 < n and children[i + 2].tag == qn("w:tbl"))
+        next_is_caption = (i + 1 < n and children[i + 1].tag == qn("w:p") and len(_text(children[i + 1])) < 40)
+        is_heading = any(k in txt for k in heading_keywords)
+
+        if is_heading or next_is_tbl or (next_next_is_tbl and next_is_caption):
+            _add_keep_with_next(el)
+        else:
+            pPr = el.find(qn("w:pPr"))
+            if pPr is None:
+                pPr = el.makeelement(qn("w:pPr"), {})
+                el.insert(0, pPr)
+            if pPr.find(qn("w:keepLines")) is None:
+                pPr.append(el.makeelement(qn("w:keepLines"), {}))
 
 
 # ---------------------------------------------------------------------------
-# Content
-
-
-def _update_cover(cover: list, q: Quarter):
-    """'2nd Quarter 2026' on the cover -> this quarter (the text sits in a few runs, twice)."""
-    for el in cover:
-        for p in el.iter(qn("w:p")):
-            if not re.fullmatch(r"\s*\d(st|nd|rd|th)\s+Quarter\s+\d{4}\s*", _text(p)):
-                continue
-            runs = [r for r in p.iter(qn("w:r")) if r.find(qn("w:t")) is not None]
-            texts = [r.find(qn("w:t")) for r in runs]
-            if len(runs) >= 3 and re.fullmatch(r"st|nd|rd|th", texts[1].text or ""):
-                texts[0].text, texts[1].text = str(q.quarter), _ordinal(q.quarter)
-                texts[2].text = f" Quarter {q.year}"
-                texts[2].set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-                for t in texts[3:]:
-                    t.text = ""
-            else:
-                _set_text(p, f"{q.quarter}{_ordinal(q.quarter)} Quarter {q.year}")
-
-
-IS_ROWS = {
-    "revenue": lambda l: l["revenue"],
-    "opex": lambda l: -l["operating_costs"],
-    "ebitda": lambda l: l["ebitda"],
-    "operatingprofit": lambda l: l["operating_profit"],
-    "operatingprofitloss": lambda l: l["operating_profit"],
-    "pbt": lambda l: l["profit_before_tax"],
-    "pat": lambda l: l["profit_after_tax"],
-}
-
-
-def _growth(cur: float, base: float):
-    diff = cur - base
-    return diff, (diff / abs(base) if base else None)
-
-
-def _fill_income_statement(tbl, comparison: Comparison, spec: SectionSpec):
-    rows = tbl.findall(qn("w:tr"))
-    head = _cells(rows[0])
-    _set_cell(head[1], *spec.header_current)
-    _set_cell(head[2], *spec.header_base)
-    cur, base = comparison.current.lines, comparison.base.lines
-    for tr in rows[2:]:
-        cells = _cells(tr)
-        getter = IS_ROWS.get(_norm(_text(cells[0])))
-        if getter is None:
-            continue
-        diff, pct = _growth(getter(cur), getter(base))
-        for tc, value in zip(cells[1:], [money(getter(cur)), money(getter(base)), money(diff), percent(pct)]):
-            _set_cell(tc, value)
-        _set_color(cells[-1], _favour_color(diff, cost=_norm(_text(cells[0])) == "opex"))
-
-
-def _fill_rows(tbl, header_rows: int, values: List[List[str]], colors: Sequence[Optional[str]] = ()):
-    """Replaces the data rows with one copy of a template data row per entry in `values`."""
-    rows = tbl.findall(qn("w:tr"))
-    protos = rows[header_rows:]
-    middle, last = protos[min(1, len(protos) - 1)], protos[-1]
-    for tr in protos:
-        tbl.remove(tr)
-    for i, row_values in enumerate(values):
-        tr = copy.deepcopy(last if i == len(values) - 1 else middle)
-        for tc, value in zip(_cells(tr), row_values):
-            _set_cell(tc, value)
-        if i < len(colors):
-            _set_color(_cells(tr)[-1], colors[i])
-        tbl.append(tr)
-
-
-def _margin_change(cur: Optional[float], base: Optional[float]) -> Optional[float]:
-    return cur - base if cur is not None and base is not None else None
-
-
-def _fill_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period):
-    """Keeps the rows the P&L supports; budget columns stay N/A until a budget is loaded."""
-    rows = tbl.findall(qn("w:tr"))
-    head = _cells(rows[1])
-    _set_cell(head[1], _short(end))
-    _set_cell(head[2], _short(ly_end))
-    cur, base = ytd.current, ytd.base
-    amounts = {
-        "revenue": "revenue", "operatingprofit": "operating_profit",
-        "profitbeforetax": "profit_before_tax", "profitaftertax": "profit_after_tax",
-    }
-    margins = {
-        "ebitdamargin": "ebitda", "operatingprofitmargin": "operating_profit",
-        "pbtmargin": "profit_before_tax", "patmargin": "profit_after_tax",
-    }
-    for tr in rows[2:]:
-        cells = _cells(tr)
-        label = _norm(_text(cells[0]))
-        if not label:
-            continue  # spacer row
-        if label in amounts:
-            key = amounts[label]
-            _, pct = _growth(cur.lines[key], base.lines[key])
-            values = [money(cur.lines[key]), money(base.lines[key]), percent(pct)]
-        elif label in margins:
-            key = margins[label]
-            c, b = cur.margin(key), base.margin(key)
-            values = [percent(c), percent(b), percent(_margin_change(c, b))]
-        else:
-            tbl.remove(tr)
-            continue
-        for tc, value in zip(cells[1:], values + ["N/A", "N/A"]):
-            _set_cell(tc, value)
-
-
-def _fill_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period):
-    rows = tbl.findall(qn("w:tr"))
-    head = _cells(rows[2])[1:]   # first cell continues the merged label column
-    for tc, text in zip(head, [_short(end), _short(ly_end), _short(end)]):
-        _set_cell(tc, text)
-    cur, base = ytd.current, ytd.base
-    _, growth = _growth(cur.lines["revenue"], base.lines["revenue"])
-
-    def coverage(pl):
-        interest = -pl.lines["interest_expenses"]
-        return f"{pl.lines['operating_profit'] / interest:.1f}" if interest > 0 else "N/A"
-
-    ratios = {
-        "revenuegrowthyoy": [percent(growth), "N/A"],
-        "operatingprofitmargin": [percent(cur.margin("operating_profit")), percent(base.margin("operating_profit"))],
-        "netprofitmargin": [percent(cur.margin("profit_after_tax")), percent(base.margin("profit_after_tax"))],
-        "interestcoverageratiotimes": [coverage(cur), coverage(base)],
-    }
-    for tr in rows[3:]:
-        cells = _cells(tr)
-        values = ratios.get(_norm(_text(cells[0])))
-        if values is None:
-            tbl.remove(tr)
-            continue
-        for tc, value in zip(cells[1:], values + ["N/A"]):
-            _set_cell(tc, value)
-
-
-def _driver_rows(comparison: Comparison, line: str, cost: bool):
-    """Table rows and their % colours for the accounts that moved a line the most."""
-    rows, colors = [], []
-    for d in comparison.drivers(line, limit=DRIVER_ROWS):
-        sign = -1 if cost else 1
-        cur, base = sign * d.current, sign * d.base
-        diff, pct = _growth(cur, base)
-        rows.append([f"{d.account} {d.name.strip()}", money(cur), money(base), money(diff), percent(pct)])
-        colors.append(_favour_color(diff, cost))
-    return rows, colors
-
-
-def _comparison_section(b: _Builder, spec: SectionSpec, comparison: Comparison, trend: List[MonthFigures]):
-    b.section(f"({spec.letter}) {spec.title}")
-    b.entity()
-    b.caption(f"Income Statement – {ENTITY} {spec.current_label} Vs {spec.base_label} (LKR Mn)")
-    _fill_income_statement(b.table(b.t.is_table), comparison, spec)
-    b.body("")
-
-    b.subhead("Revenue")
-    if spec.charts:
-        chart = trend_chart(trend, "revenue", "Monthly revenue – SLT PLC (LKR Mn)")
-        if chart:
-            b.picture(chart)
-    b.body(commentary.revenue_paragraph(comparison, ENTITY, spec.period_phrase))
-
-    b.subhead("Opex")
-    if spec.charts:
-        chart = trend_chart(trend, "opex", "Monthly operating expenses – SLT PLC (LKR Mn)")
-        if chart:
-            b.picture(chart)
-    b.body(commentary.opex_paragraph(comparison, ENTITY, spec.period_phrase))
-
-    b.subhead("Profits")
-    for text in commentary.profit_paragraphs(comparison, spec.current_label, spec.base_label):
-        b.body(text)
+# Main Report Generator
 
 
 def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path = TEMPLATE_PATH) -> Path:
@@ -518,37 +892,74 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
     q = analysis.quarter
     specs = _section_specs(q)
     b = _Builder(template_path)
-    _update_cover(b.t.cover, q)
+    doc = b.doc
 
-    # Executive Summary: the quarter against the same quarter last year.
+    # 1. Update Cover
+    _update_cover(list(doc.element.body), q)
+
+    # 2. Update Executive Summary
     yoy = analysis.comparisons["quarter_vs_last_year"]
-    phrase = specs[0].period_phrase
-    b.title("Executive Summary")
-    b.entity()
-    b.body(commentary.revenue_paragraph(yoy, ENTITY, phrase))
-    b.body(commentary.opex_paragraph(yoy, ENTITY, phrase))
-    for text in commentary.profit_paragraphs(yoy, specs[0].current_label, specs[0].base_label):
-        b.body(text)
+    _update_executive_summary_slt(doc, yoy, specs[0].period_phrase, specs[0])
 
+    # 3. Update Financial Statistics
     ytd = analysis.comparisons["ytd_vs_last_year"]
-    b.paragraph(b.t.stats_title, f"Financial Statistics – {ENTITY}")
-    _fill_financial_summary(b.table(b.t.fin_table), ytd, q.end, q.same_quarter_last_year().end)
-    b.body("")
-    _fill_key_ratios(b.table(b.t.ratio_table), ytd, q.end, q.same_quarter_last_year().end)
-    b.body("Margin variances are differences in percentage points. Interest cover is Operating profit "
-           "divided by interest expenses. Budget columns are N/A until a budget is loaded.")
+    _update_financial_summary(doc.tables[0]._element, ytd, q.end, q.same_quarter_last_year().end)
+    _update_key_ratios(doc.tables[1]._element, ytd, q.end, q.same_quarter_last_year().end)
 
-    for spec in specs:
-        _comparison_section(b, spec, analysis.comparisons[spec.comparison_key], inputs.trend)
+    # 4. Update Section A (Current Quarter vs Same Quarter Last Year)
+    _update_group_table(doc.tables[4]._element, yoy, specs[0], q)
+    _fill_income_statement(doc.tables[5]._element, yoy, specs[0])
+    _update_section_commentary(doc, "A", yoy, specs[0])
+    if inputs.trend:
+        _insert_section_a_charts(doc, inputs.trend)
 
-    b.section(f"(D) Performance of the current quarter Actuals against the Budget ({_q_short(q)} Actuals Vs Budget)")
-    b.entity()
-    b.body("Budget figures have not been loaded, so this section has not been generated. "
-           "It will be filled automatically once the budget file is provided.")
+    # 5. Update Section B (Current Quarter vs Preceding Quarter)
+    q_vs_prev = analysis.comparisons["quarter_vs_previous"]
+    _update_group_table(doc.tables[6]._element, q_vs_prev, specs[1], q)
+    _fill_income_statement(doc.tables[7]._element, q_vs_prev, specs[1])
+    _update_section_commentary(doc, "B", q_vs_prev, specs[1])
 
-    # Annexures
+    # 6. Update Section C (Current Year vs Preceding Year YTD)
+    _update_group_table(doc.tables[8]._element, ytd, specs[2], q)
+    _fill_income_statement(doc.tables[9]._element, ytd, specs[2])
+    _update_section_commentary(doc, "C", ytd, specs[2])
+
+    # Update date headers in Section C tables (Cashflow, Borrowings, Interest)
+    if len(doc.tables) > 10:
+        head_cf = _cells(doc.tables[10]._element.findall(qn("w:tr"))[0])
+        if len(head_cf) >= 3:
+            _set_cell(head_cf[1], f"YTD {_short(q.end)}")
+            _set_cell(head_cf[2], f"YTD {_short(q.same_quarter_last_year().end)}")
+    if len(doc.tables) > 12:
+        head_int = _cells(doc.tables[12]._element.findall(qn("w:tr"))[0])
+        if len(head_int) >= 3:
+            _set_cell(head_int[1], f"YTD {_short(q.end)} (LKR Mn)")
+            _set_cell(head_int[2], f"YTD {_short(q.same_quarter_last_year().end)} (LKR Mn)")
+
+    # 7. Update Section D (Actuals vs Budget)
+    if len(doc.tables) > 13:
+        t13 = doc.tables[13]._element
+        head13_0 = _cells(t13.findall(qn("w:tr"))[0])
+        head13_1 = _cells(t13.findall(qn("w:tr"))[1])
+        if len(head13_0) >= 3:
+            _set_cell(head13_0[1], f"{_q_short(q)} (Actuals)")
+            _set_cell(head13_0[2], f"{_q_short(q)} (Budget)")
+        if len(head13_1) >= 3:
+            _set_cell(head13_1[1], f"{_q_short(q)} (Actuals)")
+            _set_cell(head13_1[2], f"{_q_short(q)} (Budget)")
+        cur_q_lines = yoy.current.lines
+        for tr in t13.findall(qn("w:tr"))[2:]:
+            cells = _cells(tr)
+            getter = IS_ROWS.get(_norm(_text(cells[0])))
+            if getter is not None:
+                _set_cell(cells[1], money(getter(cur_q_lines)))
+
+    # Update section headings
+    _update_section_headings(doc, q, specs)
+
+    # 8. Append Annexure (ii) – Account-level variance drivers
     b.page_break()
-    b.title("Annexure – Account-level variance drivers")
+    b.title("Annexure (ii) – Account-level variance drivers")
     for spec in specs:
         comparison = analysis.comparisons[spec.comparison_key]
         for line, name, cost in (("revenue", "Revenue", False), ("operating_costs", "Opex", True)):
@@ -580,6 +991,10 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
                  "quarter-end YTD less the previous quarter-end YTD.")
     for note in notes:
         b.body(f"•  {note}")
+
+    # 9. Apply professional layout, pagination, and table alignment across the whole document
+    #    (Must be done AFTER all content has been appended and before saving)
+    _format_and_paginate_report(doc)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
