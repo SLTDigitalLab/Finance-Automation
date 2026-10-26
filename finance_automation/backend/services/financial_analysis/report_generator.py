@@ -18,6 +18,7 @@ document:
   - Annexure (ii) – Account-level variance drivers (GL drivers for Revenue and Opex across YoY, QoQ, YTD)
   - Sections to be completed by Finance & Data notes
 """
+import calendar
 import copy
 import re
 import uuid
@@ -33,7 +34,6 @@ from docx.shared import Cm
 from docx.text.paragraph import Paragraph
 
 from services.financial_analysis import commentary
-from services.financial_analysis.charts import trend_chart
 from services.financial_analysis.commentary import money, percent
 from services.financial_analysis.pl_engine import Comparison, FinancialAnalysis, MonthFigures
 from services.financial_analysis.periods import Period, Quarter
@@ -74,6 +74,11 @@ class ReportInputs:
 
 def _short(period: Period) -> str:
     return f"{period.label[:3]}’{period.year % 100:02d}"
+
+
+def _long(period: Period, quote: str = "’") -> str:
+    """'June’26' – the section (C) heading and the Financial Statistics tables spell the month out."""
+    return f"{calendar.month_name[period.month]}{quote}{period.year % 100:02d}"
 
 
 def _q_short(q: Quarter) -> str:
@@ -166,11 +171,25 @@ def _set_cell(tc, *lines: str):
             paragraphs.append(new)
         _set_text(paragraphs[i], line)
     for extra in paragraphs[max(len(lines), 1):]:
-        tc.remove(extra)
+        if _text(extra).strip():   # the template's blank spacing lines stay
+            tc.remove(extra)
+
+
+def _set_header(tc, *lines: str):
+    """Header text laid out like the template cell: on separate lines only where the template splits it."""
+    if sum(1 for p in tc.findall(qn("w:p")) if _text(p).strip()) > 1:
+        _set_cell(tc, *lines)
+    else:
+        _set_cell(tc, " ".join(lines))
 
 
 def _cells(tr) -> list:
     return tr.findall(qn("w:tc"))
+
+
+_AFTER_COLOR = {qn(f"w:{tag}") for tag in (
+    "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect", "bdr", "shd", "fitText",
+    "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout", "specVanish", "oMath")}
 
 
 def _set_color(tc, color: Optional[str]):
@@ -185,13 +204,35 @@ def _set_color(tc, color: Optional[str]):
             r_pr.remove(existing)
         if color:
             el = r_pr.makeelement(qn("w:color"), {qn("w:val"): color})
-            r_pr.append(el)
+            # schema order: w:color comes before spacing / size / underline etc.
+            after = next((c for c in r_pr if c.tag in _AFTER_COLOR), None)
+            if after is not None:
+                after.addprevious(el)
+            else:
+                r_pr.append(el)
 
 
 def _favour_color(diff: float, cost: bool) -> Optional[str]:
     if abs(diff) < 0.5:
         return None
     return FAVOURABLE if (diff < 0 if cost else diff > 0) else UNFAVOURABLE
+
+
+def _size_like_cell(tc):
+    """Gives the text the cell's own font size (its paragraph mark's).
+
+    The (A) Group table's placeholders are 12pt while its cells, and the (B) and (C) Group tables, are 9pt;
+    at 12pt a figure such as 26,367 is wider than the column and wraps.
+    """
+    for p in tc.findall(qn("w:p")):
+        mark = p.find(qn("w:pPr") + "/" + qn("w:rPr"))
+        if mark is None:
+            continue
+        for size in (mark.find(qn("w:sz")), mark.find(qn("w:szCs"))):
+            if size is None:
+                continue
+            for run_size in p.findall(f"{qn('w:r')}/{qn('w:rPr')}/{size.tag}"):
+                run_size.set(qn("w:val"), size.get(qn("w:val")))
 
 
 def _set_column_widths(tbl, widths: Sequence[int]):
@@ -254,8 +295,8 @@ def _margin_change(cur: Optional[float], base: Optional[float]) -> Optional[floa
 def _fill_income_statement(tbl, comparison: Comparison, spec: SectionSpec):
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[0])
-    _set_cell(head[1], *spec.header_current)
-    _set_cell(head[2], *spec.header_base)
+    _set_header(head[1], *spec.header_current)
+    _set_header(head[2], *spec.header_base)
     cur, base = comparison.current.lines, comparison.base.lines
     for tr in rows[2:]:
         cells = _cells(tr)
@@ -273,12 +314,12 @@ def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quart
     rows = tbl.findall(qn("w:tr"))
     head0 = _cells(rows[0])
     if len(head0) >= 11:
-        _set_cell(head0[1], f"{spec.current_label} Group")
-        _set_cell(head0[2], f"{spec.base_label} Group")
-        _set_cell(head0[5], f"{spec.current_label} SLT PLC")
-        _set_cell(head0[6], f"{spec.base_label} SLT PLC")
-        _set_cell(head0[9], f"{spec.current_label} Mobitel")
-        _set_cell(head0[10], f"{spec.base_label} Mobitel")
+        _set_header(head0[1], spec.current_label, "Group")
+        _set_header(head0[2], spec.base_label, "Group")
+        _set_header(head0[5], spec.current_label, "SLT PLC")
+        _set_header(head0[6], spec.base_label, "SLT PLC")
+        _set_header(head0[9], spec.current_label, "Mobitel")
+        _set_header(head0[10], spec.base_label, "Mobitel")
 
     cur, base = comparison.current.lines, comparison.base.lines
     for tr in rows[2:]:
@@ -289,10 +330,9 @@ def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quart
             continue
         cur_val, base_val = getter(cur), getter(base)
         diff, pct = _growth(cur_val, base_val)
-        _set_cell(cells[6], money(cur_val))
-        _set_cell(cells[7], money(base_val))
-        _set_cell(cells[8], money(diff))
-        _set_cell(cells[9], percent(pct))
+        for tc, value in zip(cells[6:10], [money(cur_val), money(base_val), money(diff), percent(pct)]):
+            _set_cell(tc, value)
+            _size_like_cell(tc)
         _set_color(cells[9], _favour_color(diff, cost=(label == "opex")))
 
 
@@ -328,8 +368,8 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period)
     """Fills the P&L lines supported by the trial balance, keeping other rows intact."""
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[1])
-    _set_cell(head[1], _short(end))
-    _set_cell(head[2], _short(ly_end))
+    _set_cell(head[1], _long(end, "'"))
+    _set_cell(head[2], _long(ly_end, "'"))
     cur, base = ytd.current, ytd.base
     amounts = {
         "revenue": "revenue", "operatingprofit": "operating_profit",
@@ -362,7 +402,7 @@ def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period):
     """Updates key ratios supported by the trial balance, keeping other rows intact."""
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[2])[1:]
-    for tc, text in zip(head, [_short(end), _short(ly_end), _short(end)]):
+    for tc, text in zip(head, [_long(end, "'"), _long(ly_end, "'"), _long(end, "'")]):
         _set_cell(tc, text)
     cur, base = ytd.current, ytd.base
     _, growth = _growth(cur.lines["revenue"], base.lines["revenue"])
@@ -505,55 +545,86 @@ def _update_section_headings(doc: Document, q: Quarter, specs: List[SectionSpec]
                                   f"({specs[1].current_label} vs {specs[1].base_label})")
         elif "performanceofthecurrentyearagainsttheprecedingyear" in t:
             _set_text(p._element, f"Performance of the current year against the preceding year "
-                                  f"({specs[2].current_label} Vs {specs[2].base_label})")
+                                  f"(YTD {_long(q.end)} Vs YTD {_long(q.same_quarter_last_year().end)})")
         elif "performanceofthecurrentquarteractualsagainstthebudget" in t:
             _set_text(p._element, f"(D) Performance of the current quarter Actuals against the Budget "
                                   f"({_q_short(q)} Actuals Vs Budget)")
-            p_idx = paras.index(p)
-            if p_idx + 3 < len(paras):
-                _set_text(paras[p_idx + 3]._element, "Budget figures have not been loaded, so this section reflects "
-                                                     "template placeholders until a budget file is provided.")
 
 
-def _insert_section_a_charts(doc: Document, trend: List[MonthFigures]):
-    paras = doc.paragraphs
-    sec_a = -1
-    for i, p in enumerate(paras):
-        if "performanceofthecurrentquarteragainsttheprecedingyear" in _norm(p.text):
-            sec_a = i
-            break
-    if sec_a == -1:
+# ---------------------------------------------------------------------------
+# Pagination
+#
+# Finance's report has no page breaks: sections reach the top of a page by runs of blank lines sized to
+# the template's own text. Generated commentary is longer or shorter, so those runs would end mid-page
+# (or spill a page). Each run becomes a page break before the section it pushed down.
+
+SPACER_LINES = 3          # a run this long ends a page in the template; shorter runs are spacing
+KEEP_TABLE_ROWS = 30      # tables up to this size fit one page and are kept together
+_PPR_FIRST = ("pStyle", "keepNext", "keepLines", "pageBreakBefore")   # schema order at the start of w:pPr
+
+
+def _set_ppr_flag(p, name: str):
+    p_pr = p.find(qn("w:pPr"))
+    if p_pr is None:
+        p_pr = p.makeelement(qn("w:pPr"), {})
+        p.insert(0, p_pr)
+    if p_pr.find(qn(f"w:{name}")) is not None:
         return
-    slt_a = -1
-    for i in range(sec_a, len(paras)):
-        if _norm(paras[i].text) == "sltplc":
-            slt_a = i
-            break
-    if slt_a == -1:
+    el = p_pr.makeelement(qn(f"w:{name}"), {})
+    earlier = {qn(f"w:{t}") for t in _PPR_FIRST[:_PPR_FIRST.index(name)]}
+    previous = [c for c in p_pr if c.tag in earlier]
+    if previous:
+        previous[-1].addnext(el)
+    else:
+        p_pr.insert(0, el)
+
+
+def _is_spacer(el) -> bool:
+    if el.tag != qn("w:p") or _text(el).strip():
+        return False
+    content = ("w:drawing", "w:pict", "w:object", "w:sectPr", "w:br")
+    return not any(next(el.iter(qn(tag)), None) is not None for tag in content)
+
+
+def _first_paragraph(el):
+    return el if el.tag == qn("w:p") else next(el.iter(qn("w:p")))
+
+
+def _keep_template_pagination(doc: Document):
+    body = doc.element.body
+    children = [el for el in body if el.tag in (qn("w:p"), qn("w:tbl"))]
+    start = next((i for i, el in enumerate(children) if _norm(_text(el)) == "executivesummary"), 0)
+    run = []
+    for el in children[start:]:
+        if _is_spacer(el):
+            run.append(el)
+            continue
+        if len(run) >= SPACER_LINES:
+            for spacer in run:
+                body.remove(spacer)
+            _set_ppr_flag(_first_paragraph(el), "pageBreakBefore")
+        run = []
+
+        if el.tag == qn("w:tbl"):
+            _keep_table_together(el)
+        elif _is_heading(el):
+            _set_ppr_flag(el, "keepNext")      # stays with what it introduces
+
+
+def _keep_table_together(tbl):
+    rows = tbl.findall(qn("w:tr"))
+    if len(rows) > KEEP_TABLE_ROWS:
         return
+    for tr in rows[:-1]:
+        for p in tr.iter(qn("w:p")):
+            _set_ppr_flag(p, "keepNext")
 
-    rev_idx, opx_idx = -1, -1
-    for k in range(slt_a, slt_a + 25):
-        if k < len(paras):
-            t = _norm(paras[k].text)
-            if t == "revenue" and rev_idx == -1:
-                rev_idx = k
-            elif t == "opex" and opx_idx == -1:
-                opx_idx = k
 
-    if rev_idx != -1 and rev_idx + 1 < len(paras):
-        chart_rev = trend_chart(trend, "revenue", "Monthly revenue – SLT PLC (LKR Mn)")
-        if chart_rev:
-            p_obj = Paragraph(paras[rev_idx + 1]._element, doc._body)
-            p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_obj.add_run().add_picture(chart_rev, width=Cm(15.0))
-
-    if opx_idx != -1 and opx_idx + 1 < len(paras):
-        chart_opx = trend_chart(trend, "opex", "Monthly operating expenses – SLT PLC (LKR Mn)")
-        if chart_opx:
-            p_obj = Paragraph(paras[opx_idx + 1]._element, doc._body)
-            p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_obj.add_run().add_picture(chart_opx, width=Cm(15.0))
+def _is_heading(p) -> bool:
+    """A short line of text (heading or table caption) – not a sentence, a chart or a blank line."""
+    text = _text(p).strip()
+    has_drawing = next(p.iter(qn("w:drawing")), None) is not None
+    return bool(text) and len(text) < 100 and not text.endswith(".") and not has_drawing
 
 
 # ---------------------------------------------------------------------------
@@ -662,227 +733,6 @@ class _Builder:
         self.doc.save(str(path))
 
 
-def _add_keep_with_next(p_element):
-    pPr = p_element.find(qn("w:pPr"))
-    if pPr is None:
-        pPr = p_element.makeelement(qn("w:pPr"), {})
-        p_element.insert(0, pPr)
-    if pPr.find(qn("w:keepNext")) is None:
-        pPr.append(p_element.makeelement(qn("w:keepNext"), {}))
-    if pPr.find(qn("w:keepLines")) is None:
-        pPr.append(p_element.makeelement(qn("w:keepLines"), {}))
-
-
-def _add_cant_split(tr_element):
-    trPr = tr_element.find(qn("w:trPr"))
-    if trPr is None:
-        trPr = tr_element.makeelement(qn("w:trPr"), {})
-        tr_element.insert(0, trPr)
-    if trPr.find(qn("w:cantSplit")) is None:
-        trPr.append(tr_element.makeelement(qn("w:cantSplit"), {}))
-
-
-def _add_tbl_header(tr_element):
-    trPr = tr_element.find(qn("w:trPr"))
-    if trPr is None:
-        trPr = tr_element.makeelement(qn("w:trPr"), {})
-        tr_element.insert(0, trPr)
-    if trPr.find(qn("w:tblHeader")) is None:
-        trPr.append(tr_element.makeelement(qn("w:tblHeader"), {}))
-
-
-def _scale_table_to_width(tbl_el, new_widths: list, max_width_dxa: int):
-    """Scale grid columns and all cell widths to new_widths, update tblW."""
-    tblPr = tbl_el.find(qn("w:tblPr"))
-    # Update tblW
-    tblW = tblPr.find(qn("w:tblW")) if tblPr is not None else None
-    if tblW is not None:
-        tblW.set(qn("w:w"), str(max_width_dxa))
-        tblW.set(qn("w:type"), "dxa")
-    elif tblPr is not None:
-        tblW = tblPr.makeelement(qn("w:tblW"), {qn("w:w"): str(max_width_dxa), qn("w:type"): "dxa"})
-        tblPr.append(tblW)
-
-    # Set tblLayout to fixed
-    if tblPr is not None:
-        old_layout = tblPr.find(qn("w:tblLayout"))
-        if old_layout is not None:
-            tblPr.remove(old_layout)
-        layout = tblPr.makeelement(qn("w:tblLayout"), {qn("w:type"): "fixed"})
-        tblPr.append(layout)
-
-    # Update gridCol widths
-    grid = tbl_el.find(qn("w:tblGrid"))
-    if grid is not None:
-        for col, nw in zip(grid.findall(qn("w:gridCol")), new_widths):
-            col.set(qn("w:w"), str(nw))
-
-    # Update every cell's tcW, respecting gridSpan
-    for tr in tbl_el.findall(qn("w:tr")):
-        col_idx = 0
-        for tc in tr.findall(qn("w:tc")):
-            tcPr = tc.find(qn("w:tcPr"))
-            if tcPr is None:
-                tcPr = tc.makeelement(qn("w:tcPr"), {})
-                tc.insert(0, tcPr)
-            span_el = tcPr.find(qn("w:gridSpan"))
-            span = int(span_el.get(qn("w:val"))) if span_el is not None else 1
-            cell_w = sum(new_widths[col_idx: col_idx + span])
-            tcW = tcPr.find(qn("w:tcW"))
-            if tcW is None:
-                tcW = tcPr.makeelement(qn("w:tcW"), {})
-                tcPr.insert(0, tcW)
-            tcW.set(qn("w:w"), str(cell_w))
-            tcW.set(qn("w:type"), "dxa")
-            col_idx += span
-
-
-def _format_and_paginate_report(doc: Document, max_width_dxa: int = 9540):
-    """Applies professional layout, pagination, alignment, and margin fitting across the entire document.
-
-    Rules applied:
-    - All tables: centered, scaled to fit page width if over max_width_dxa (9540 dxa), fixed layout.
-    - Table rows: cantSplit on every row to prevent mid-row page breaks.
-    - Header rows: tblHeader so headers repeat across pages for multi-page tables.
-    - Short tables (≤25 rows): cells keep rows together on a single page.
-    - Headings and paragraphs preceding tables: keepNext + keepLines to prevent orphan headings.
-    - Redundant blank paragraphs between a heading and a table are removed.
-    """
-    # ------------------------------------------------------------------ #
-    # 1. Table formatting: width scaling, alignment, cantSplit, tblHeader #
-    # ------------------------------------------------------------------ #
-    for t_idx, t in enumerate(doc.tables):
-        tbl_el = t._element
-
-        # Ensure tblPr exists
-        tblPr = tbl_el.find(qn("w:tblPr"))
-        if tblPr is None:
-            tblPr = tbl_el.makeelement(qn("w:tblPr"), {})
-            tbl_el.insert(0, tblPr)
-
-        # Center the table on the page
-        jc = tblPr.find(qn("w:jc"))
-        if jc is None:
-            jc = tblPr.makeelement(qn("w:jc"), {})
-            tblPr.append(jc)
-        jc.set(qn("w:val"), "center")
-
-        # Scale down if wider than page margins
-        grid = tbl_el.find(qn("w:tblGrid"))
-        if grid is not None:
-            raw_cols = grid.findall(qn("w:gridCol"))
-            try:
-                widths = [int(c.get(qn("w:w"), "0")) for c in raw_cols]
-            except (ValueError, TypeError):
-                widths = []
-            if widths:
-                total_w = sum(widths)
-                if total_w > max_width_dxa:
-                    scale = max_width_dxa / total_w
-                    new_widths = [max(300, int(round(w * scale))) for w in widths]
-                    diff = max_width_dxa - sum(new_widths)
-                    new_widths[-1] += diff
-                    _scale_table_to_width(tbl_el, new_widths, max_width_dxa)
-                else:
-                    # Even if not overflowing, ensure fixed layout is set
-                    old_layout = tblPr.find(qn("w:tblLayout"))
-                    if old_layout is not None:
-                        tblPr.remove(old_layout)
-                    layout = tblPr.makeelement(qn("w:tblLayout"), {qn("w:type"): "fixed"})
-                    tblPr.append(layout)
-
-        rows = tbl_el.findall(qn("w:tr"))
-        num_rows = len(rows)
-        num_cols = len(t.columns) if t.columns else (len(grid.findall(qn("w:gridCol"))) if grid is not None else 0)
-
-        # Header rows: 2 for wide multi-header tables (num_cols > 10 and num_rows > 3), 1 for others
-        header_row_count = 2 if (num_cols > 10 and num_rows > 3) else 1
-
-        for r_i, tr in enumerate(rows):
-            _add_cant_split(tr)
-            if r_i < header_row_count:
-                _add_tbl_header(tr)
-
-    # ------------------------------------------------------------------ #
-    # 2. Paragraph keep-with-next, keep-lines, remove orphan blanks      #
-    # ------------------------------------------------------------------ #
-    heading_keywords = [
-        "executivesummary", "sltgroup", "sltplc", "mobitel",
-        "financialstatistics", "financialsummary", "keyratios",
-        "operationalstatistics", "keydrivers", "capacityvsutilization",
-        "performanceof", "bperformanceof", "dperformanceof",
-        "incomestatement", "revenue", "opex", "profits",
-        "liquidityandoperatingcashflow", "borrowings", "interestcost",
-        "keyprojectsinfo", "ftthportutilization", "ftthrtwomwise", "ftthactive",
-        "annexure", "sectionstobecompleted", "datanotes",
-    ]
-
-    body = doc.element.body
-    children = list(body)
-    n = len(children)
-
-    # Pass 1: remove purely blank paragraphs that sit between a heading-para and a table
-    to_remove = set()
-    for i, el in enumerate(children):
-        if el.tag != qn("w:p"):
-            continue
-        txt = _norm(_text(el))
-        has_pb = any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br")))
-        if has_pb or txt:          # non-blank or has a page break — keep
-            continue
-        # blank paragraph: check if it is sandwiched between a heading-like para and a table
-        prev_content = None
-        for j in range(i - 1, -1, -1):
-            if children[j].tag in (qn("w:p"), qn("w:tbl")):
-                prev_content = children[j]
-                break
-        next_content = None
-        for j in range(i + 1, n):
-            if children[j].tag in (qn("w:p"), qn("w:tbl")):
-                next_content = children[j]
-                break
-        prev_is_heading = (
-            prev_content is not None
-            and prev_content.tag == qn("w:p")
-            and any(k in _norm(_text(prev_content)) for k in heading_keywords)
-        )
-        next_is_tbl = next_content is not None and next_content.tag == qn("w:tbl")
-        if prev_is_heading and next_is_tbl:
-            to_remove.add(id(el))
-
-    for el in children:
-        if id(el) in to_remove:
-            body.remove(el)
-
-    # Rebuild children list after removals
-    children = list(body)
-    n = len(children)
-
-    # Pass 2: apply keepNext / keepLines to headings, subheadings, and captions preceding tables
-    for i, el in enumerate(children):
-        if el.tag != qn("w:p"):
-            continue
-        txt = _norm(_text(el))
-        has_pb = any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br")))
-        if has_pb:
-            continue  # page-break paragraphs must not have keepNext
-
-        next_is_tbl = (i + 1 < n and children[i + 1].tag == qn("w:tbl"))
-        next_next_is_tbl = (i + 2 < n and children[i + 2].tag == qn("w:tbl"))
-        next_is_caption = (i + 1 < n and children[i + 1].tag == qn("w:p") and len(_text(children[i + 1])) < 40)
-        is_heading = any(k in txt for k in heading_keywords)
-
-        if is_heading or next_is_tbl or (next_next_is_tbl and next_is_caption):
-            _add_keep_with_next(el)
-        else:
-            pPr = el.find(qn("w:pPr"))
-            if pPr is None:
-                pPr = el.makeelement(qn("w:pPr"), {})
-                el.insert(0, pPr)
-            if pPr.find(qn("w:keepLines")) is None:
-                pPr.append(el.makeelement(qn("w:keepLines"), {}))
-
-
 # ---------------------------------------------------------------------------
 # Main Report Generator
 
@@ -910,8 +760,6 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
     _update_group_table(doc.tables[4]._element, yoy, specs[0], q)
     _fill_income_statement(doc.tables[5]._element, yoy, specs[0])
     _update_section_commentary(doc, "A", yoy, specs[0])
-    if inputs.trend:
-        _insert_section_a_charts(doc, inputs.trend)
 
     # 5. Update Section B (Current Quarter vs Preceding Quarter)
     q_vs_prev = analysis.comparisons["quarter_vs_previous"]
@@ -933,20 +781,16 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
     if len(doc.tables) > 12:
         head_int = _cells(doc.tables[12]._element.findall(qn("w:tr"))[0])
         if len(head_int) >= 3:
-            _set_cell(head_int[1], f"YTD {_short(q.end)} (LKR Mn)")
-            _set_cell(head_int[2], f"YTD {_short(q.same_quarter_last_year().end)} (LKR Mn)")
+            _set_header(head_int[1], f"YTD {_short(q.end)}", "(LKR Mn)")
+            _set_header(head_int[2], f"YTD {_short(q.same_quarter_last_year().end)}", "(LKR Mn)")
 
     # 7. Update Section D (Actuals vs Budget)
     if len(doc.tables) > 13:
         t13 = doc.tables[13]._element
-        head13_0 = _cells(t13.findall(qn("w:tr"))[0])
-        head13_1 = _cells(t13.findall(qn("w:tr"))[1])
-        if len(head13_0) >= 3:
-            _set_cell(head13_0[1], f"{_q_short(q)} (Actuals)")
-            _set_cell(head13_0[2], f"{_q_short(q)} (Budget)")
-        if len(head13_1) >= 3:
-            _set_cell(head13_1[1], f"{_q_short(q)} (Actuals)")
-            _set_cell(head13_1[2], f"{_q_short(q)} (Budget)")
+        head13 = _cells(t13.findall(qn("w:tr"))[0])
+        if len(head13) >= 3:
+            _set_header(head13[1], _q_short(q), "(Actuals)")
+            _set_header(head13[2], _q_short(q), "(Budget)")
         cur_q_lines = yoy.current.lines
         for tr in t13.findall(qn("w:tr"))[2:]:
             cells = _cells(tr)
@@ -956,6 +800,7 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
 
     # Update section headings
     _update_section_headings(doc, q, specs)
+    _keep_template_pagination(doc)
 
     # 8. Append Annexure (ii) – Account-level variance drivers
     b.page_break()
@@ -983,6 +828,8 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
 
     b.title("Data notes")
     notes = list(inputs.data_notes)
+    notes.append("Budget figures have not been loaded, so section (D) shows the template's budget "
+                 "placeholders until a budget file is provided.")
     for u in analysis.unmapped:
         notes.append(f"Account {u.account} {u.name.strip()} ({u.period}, LKR {u.amount:,.1f} Mn) "
                      "is not in the GL mapping and is excluded from the P&L.")
@@ -991,10 +838,6 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
                  "quarter-end YTD less the previous quarter-end YTD.")
     for note in notes:
         b.body(f"•  {note}")
-
-    # 9. Apply professional layout, pagination, and table alignment across the whole document
-    #    (Must be done AFTER all content has been appended and before saving)
-    _format_and_paginate_report(doc)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

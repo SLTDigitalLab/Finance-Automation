@@ -3,11 +3,12 @@ import zipfile
 
 import pytest
 from docx import Document
+from docx.oxml.ns import qn
 
 from services.financial_analysis.mapping_reader import read_gl_mapping
 from services.financial_analysis.periods import Period, Quarter
 from services.financial_analysis.pl_engine import build_analysis, monthly_trend
-from services.financial_analysis.report_generator import ReportInputs, generate_report
+from services.financial_analysis.report_generator import TEMPLATE_PATH, ReportInputs, generate_report
 from tests.financial_analysis.helpers import balances, write_mapping
 
 MN = 1_000_000
@@ -94,68 +95,59 @@ def test_commentary_and_notes(report):
     assert "•  Test note" in text
 
 
-def test_trend_charts_present(report):
+def _texts(el):
+    return "".join(t.text or "" for t in el.iter(qn("w:t")))
+
+
+def _layout(doc):
+    """Tables (grid widths) and lines of text up to the generated Annexure (ii); blank lines are left out."""
+    out = []
+    for el in doc.element.body:
+        if el.tag == qn("w:p") and "Annexure (ii)" in _texts(el):
+            break
+        if el.tag == qn("w:tbl"):
+            out.append(("tbl", tuple(c.get(qn("w:w")) for c in el.iter(qn("w:gridCol")))))
+        elif el.tag == qn("w:p") and (_texts(el).strip() or next(el.iter(qn("w:drawing")), None) is not None):
+            out.append(("p",))
+    return out
+
+
+def _page_starts(doc):
+    """Text of each paragraph that starts a page (pageBreakBefore), or of a table's first cell."""
+    return [_texts(el)[:30] for el in doc.element.body
+            if el.tag in (qn("w:p"), qn("w:tbl"))
+            and next(el.iter(qn("w:p"))).find(f"{qn('w:pPr')}/{qn('w:pageBreakBefore')}") is not None]
+
+
+def test_layout_matches_finance_template(report):
+    """Table widths and charts are Finance's own; only the annexure and notes are added."""
+    generated, template = Document(str(report)), Document(str(TEMPLATE_PATH))
+    assert _layout(generated) == _layout(template)
     xml, _ = _xml(report)
-    assert xml.count("<pic:pic") >= 3              # cover picture + revenue and opex trend charts
+    with zipfile.ZipFile(TEMPLATE_PATH) as z:
+        assert xml.count("<pic:pic") == z.read("word/document.xml").decode("utf8").count("<pic:pic")
 
 
-def test_table_formatting_applied(report):
-    """Verifies _format_and_paginate_report() was called and applied correctly."""
-    from docx.oxml.ns import qn as _qn
+def test_blank_line_spacers_become_page_breaks(report):
+    starts = _page_starts(Document(str(report)))
+    for heading in ("Financial Statistics", "Key Ratios", "Operational Statistics", "(D) Performance",
+                    "(ii) FTTH Port Utilization", "Annexure (i)"):
+        assert any(s.startswith(heading) for s in starts), heading
+    assert not any(s.startswith("Executive Summary") or s.startswith("Financial Analysis") for s in starts)
 
+
+def test_group_table_values_use_the_cells_font_size(report):
+    group = Document(str(report)).tables[4]._tbl
+    revenue = group.tr_lst[2].tc_lst[6]
+    sizes = {el.get(qn("w:val")) for el in revenue.iter(qn("w:sz"))}
+    assert sizes == {"18"}                                    # 9pt, as in the (B) and (C) Group tables
+
+
+def test_header_lines_follow_template(report):
     doc = Document(str(report))
-    body = doc.element.body
-    children = [el for el in body if el.tag in (_qn("w:p"), _qn("w:tbl"), _qn("w:sectPr"))]
-    MAX_W = 9570  # page width in dxa with standard margins
-
-    for ti, t in enumerate(doc.tables):
-        tbl_el = t._element
-        tblPr = tbl_el.find(_qn("w:tblPr"))
-        rows = tbl_el.findall(_qn("w:tr"))
-
-        # Every table must be centered
-        jc = tblPr.find(_qn("w:jc")) if tblPr is not None else None
-        assert jc is not None and jc.get(_qn("w:val")) == "center", (
-            f"TABLE#{ti} not centered"
-        )
-
-        # No table may exceed the page margins
-        tblW_el = tblPr.find(_qn("w:tblW")) if tblPr is not None else None
-        if tblW_el is not None:
-            w = int(tblW_el.get(_qn("w:w"), "0"))
-            assert w <= MAX_W, f"TABLE#{ti} too wide: {w} dxa (max {MAX_W})"
-
-        # Row 0 must have tblHeader
-        if rows:
-            trPr0 = rows[0].find(_qn("w:trPr"))
-            assert trPr0 is not None and trPr0.find(_qn("w:tblHeader")) is not None, (
-                f"TABLE#{ti} row 0 missing tblHeader"
-            )
-
-        # Short tables (≤20 rows): every data row must have cantSplit
-        if 1 < len(rows) <= 20:
-            for r_i, tr in enumerate(rows[1:], start=1):
-                trPr = tr.find(_qn("w:trPr"))
-                assert trPr is not None and trPr.find(_qn("w:cantSplit")) is not None, (
-                    f"TABLE#{ti} row {r_i} missing cantSplit"
-                )
-
-    # Every non-page-break paragraph immediately before a table must have keepNext
-    n = len(children)
-    for i, el in enumerate(children):
-        if el.tag != _qn("w:p"):
-            continue
-        if i + 1 < n and children[i + 1].tag == _qn("w:tbl"):
-            # Page-break paragraphs are intentionally excluded from keepNext
-            has_pb = any(
-                br.get(_qn("w:type")) == "page"
-                for br in el.iter(_qn("w:br"))
-            )
-            if has_pb:
-                continue
-            pPr = el.find(_qn("w:pPr"))
-            assert pPr is not None and pPr.find(_qn("w:keepNext")) is not None, (
-                "Paragraph immediately before a table missing keepNext: "
-                + "".join(t.text or "" for t in el.iter(_qn("w:t")))[:60]
-            )
+    budget = next(t for t in doc.tables if "Budget" in t.rows[0].cells[2].text)
+    assert budget.rows[0].cells[1].text == "Q1’26\n(Actuals)"
+    merged = budget._tbl.tr_lst[1].tc_lst[1]                 # continuation of the vertically merged header
+    assert "".join(t.text or "" for t in merged.iter(qn("w:t"))) == ""
+    assert "(YTD March’26 Vs YTD March’25)" in "\n".join(p.text for p in doc.paragraphs)
 
