@@ -208,11 +208,47 @@ def _leaf_lines(line: str) -> set:
 
 
 @dataclass
+class BudgetFigures:
+    quarter: Quarter
+    quarter_opex: Optional[float] = None
+    quarter_actual_opex: Optional[float] = None
+    ytd_opex: Optional[float] = None
+    ytd_opex_actual: Optional[float] = None
+    ytd_opex_ly_actual: Optional[float] = None
+    ytd_direct_expenses: Optional[float] = None
+    ytd_direct_actual: Optional[float] = None
+    ytd_direct_ly_actual: Optional[float] = None
+    ytd_sales_expenses: Optional[float] = None
+    ytd_sales_actual: Optional[float] = None
+    ytd_marketing_expenses: Optional[float] = None
+    ytd_marketing_actual: Optional[float] = None
+    ytd_sales_mktg_expenses: Optional[float] = None
+    ytd_sales_mktg_actual: Optional[float] = None
+    ytd_sales_mktg_ly_actual: Optional[float] = None
+    ytd_ga_costs: Optional[float] = None
+    ytd_ga_actual: Optional[float] = None
+    ytd_ga_ly_actual: Optional[float] = None
+    ytd_staff_costs: Optional[float] = None
+    ytd_staff_actual: Optional[float] = None
+    ytd_staff_ly_actual: Optional[float] = None
+    quarter_direct_budget: Optional[float] = None
+    quarter_direct_actual: Optional[float] = None
+    quarter_sales_mktg_budget: Optional[float] = None
+    quarter_sales_mktg_actual: Optional[float] = None
+    quarter_ga_budget: Optional[float] = None
+    quarter_ga_actual: Optional[float] = None
+    quarter_staff_budget: Optional[float] = None
+    quarter_staff_actual: Optional[float] = None
+    lines: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
 class FinancialAnalysis:
     quarter: Quarter
     comparisons: Dict[str, Comparison]
     unmapped: List[UnmappedAccount] = field(default_factory=list)
     budget_available: bool = False
+    budget: Optional[BudgetFigures] = None
 
 
 YTDLoader = Callable[[Period], Optional[Mapping[int, AccountBalance]]]
@@ -250,7 +286,13 @@ def required_periods(quarter: Quarter) -> List[Period]:
     return sorted(needed)
 
 
-def build_analysis(quarter: Quarter, load_ytd: YTDLoader, mapping: GLMapping) -> FinancialAnalysis:
+def build_analysis(
+    quarter: Quarter,
+    load_ytd: YTDLoader,
+    mapping: GLMapping,
+    budget_end: Optional[Dict] = None,
+    budget_start: Optional[Dict] = None,
+) -> FinancialAnalysis:
     """
     load_ytd(period) returns that month's account balances, or None if the
     trial balance is not loaded. Raises MissingPeriodsError listing every
@@ -288,4 +330,108 @@ def build_analysis(quarter: Quarter, load_ytd: YTDLoader, mapping: GLMapping) ->
             "ytd_vs_last_year", f"YTD {quarter.end.label} vs YTD {last_year.end.label}",
             ytd[quarter.end], ytd[last_year.end]),
     }
-    return FinancialAnalysis(quarter, comparisons, sorted(unmapped.values(), key=lambda u: u.account))
+
+    budget_available = budget_end is not None
+    budget_fig = None
+    if budget_end:
+        summ_end = budget_end.get("summary", {})
+        summ_start = budget_start.get("summary", {}) if budget_start else {}
+        lines_raw = budget_end.get("lines", {})
+
+        def _val(s_dict, cat, field_name):
+            return s_dict.get(cat, {}).get(field_name)
+
+        ytd_opex = budget_end.get("operating_cost_ytd") or _val(summ_end, "operating_cost", "ytd_budget")
+        ytd_opex_act = _val(summ_end, "operating_cost", "ytd_actual")
+        ytd_opex_ly = _val(summ_end, "operating_cost", "ytd_ly_actual")
+
+        ytd_direct = _val(summ_end, "direct_expenses", "ytd_budget")
+        ytd_direct_act = _val(summ_end, "direct_expenses", "ytd_actual")
+        ytd_direct_ly = _val(summ_end, "direct_expenses", "ytd_ly_actual")
+
+        ytd_sales = _val(summ_end, "sales_expenses", "ytd_budget")
+        ytd_sales_act = _val(summ_end, "sales_expenses", "ytd_actual")
+        ytd_mktg = _val(summ_end, "marketing_expenses", "ytd_budget")
+        ytd_mktg_act = _val(summ_end, "marketing_expenses", "ytd_actual")
+
+        ytd_sm = _val(summ_end, "sales_marketing", "ytd_budget")
+        ytd_sm_act = _val(summ_end, "sales_marketing", "ytd_actual")
+        ytd_sm_ly = _val(summ_end, "sales_marketing", "ytd_ly_actual")
+
+        ytd_ga = _val(summ_end, "ga_costs", "ytd_budget")
+        ytd_ga_act = _val(summ_end, "ga_costs", "ytd_actual")
+        ytd_ga_ly = _val(summ_end, "ga_costs", "ytd_ly_actual")
+
+        ytd_staff = _val(summ_end, "staff_costs", "ytd_budget")
+        ytd_staff_act = _val(summ_end, "staff_costs", "ytd_actual")
+        ytd_staff_ly = _val(summ_end, "staff_costs", "ytd_ly_actual")
+
+        def _q_diff(end_val, start_val):
+            if end_val is None:
+                return None
+            if quarter.quarter == 1 or start_val is None:
+                return end_val
+            return end_val - start_val
+
+        quarter_opex = None
+        if ytd_opex is not None:
+            if quarter.quarter == 1:
+                quarter_opex = ytd_opex
+            elif budget_start and budget_start.get("operating_cost_ytd") is not None:
+                quarter_opex = ytd_opex - budget_start.get("operating_cost_ytd")
+            elif "Total Operating Cost" in lines_raw and isinstance(lines_raw["Total Operating Cost"], dict):
+                quarter_opex = lines_raw["Total Operating Cost"].get("ptd")
+
+        quarter_dir_bud = _q_diff(ytd_direct, _val(summ_start, "direct_expenses", "ytd_budget"))
+        quarter_dir_act = _q_diff(ytd_direct_act, _val(summ_start, "direct_expenses", "ytd_actual"))
+        quarter_sm_bud = _q_diff(ytd_sm, _val(summ_start, "sales_marketing", "ytd_budget"))
+        quarter_sm_act = _q_diff(ytd_sm_act, _val(summ_start, "sales_marketing", "ytd_actual"))
+        quarter_ga_bud = _q_diff(ytd_ga, _val(summ_start, "ga_costs", "ytd_budget"))
+        quarter_ga_act = _q_diff(ytd_ga_act, _val(summ_start, "ga_costs", "ytd_actual"))
+        quarter_staff_bud = _q_diff(ytd_staff, _val(summ_start, "staff_costs", "ytd_budget"))
+        quarter_staff_act = _q_diff(ytd_staff_act, _val(summ_start, "staff_costs", "ytd_actual"))
+
+        quarter_act_opex = -current.lines.get("operating_costs", 0.0)
+        lines = {k.strip(): (v.get("ytd") if isinstance(v, dict) else v) for k, v in lines_raw.items()}
+
+        budget_fig = BudgetFigures(
+            quarter=quarter,
+            quarter_opex=quarter_opex,
+            quarter_actual_opex=quarter_act_opex,
+            ytd_opex=ytd_opex,
+            ytd_opex_actual=ytd_opex_act,
+            ytd_opex_ly_actual=ytd_opex_ly,
+            ytd_direct_expenses=ytd_direct,
+            ytd_direct_actual=ytd_direct_act,
+            ytd_direct_ly_actual=ytd_direct_ly,
+            ytd_sales_expenses=ytd_sales,
+            ytd_sales_actual=ytd_sales_act,
+            ytd_marketing_expenses=ytd_mktg,
+            ytd_marketing_actual=ytd_mktg_act,
+            ytd_sales_mktg_expenses=ytd_sm,
+            ytd_sales_mktg_actual=ytd_sm_act,
+            ytd_sales_mktg_ly_actual=ytd_sm_ly,
+            ytd_ga_costs=ytd_ga,
+            ytd_ga_actual=ytd_ga_act,
+            ytd_ga_ly_actual=ytd_ga_ly,
+            ytd_staff_costs=ytd_staff,
+            ytd_staff_actual=ytd_staff_act,
+            ytd_staff_ly_actual=ytd_staff_ly,
+            quarter_direct_budget=quarter_dir_bud,
+            quarter_direct_actual=quarter_dir_act,
+            quarter_sales_mktg_budget=quarter_sm_bud,
+            quarter_sales_mktg_actual=quarter_sm_act,
+            quarter_ga_budget=quarter_ga_bud,
+            quarter_ga_actual=quarter_ga_act,
+            quarter_staff_budget=quarter_staff_bud,
+            quarter_staff_actual=quarter_staff_act,
+            lines=lines,
+        )
+
+    return FinancialAnalysis(
+        quarter=quarter,
+        comparisons=comparisons,
+        unmapped=sorted(unmapped.values(), key=lambda u: u.account),
+        budget_available=budget_available,
+        budget=budget_fig,
+    )

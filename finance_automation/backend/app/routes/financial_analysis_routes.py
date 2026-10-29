@@ -18,6 +18,8 @@ from app.routes.use_case_routes import require_use_case
 from app.services.audit_logger import log_audit
 from config import settings
 from services.financial_analysis import mapping_store, tb_store
+from services.financial_analysis.budget_reader import BudgetFormatError
+from services.financial_analysis import budget_store
 from services.financial_analysis.mapping_reader import MappingFormatError
 from services.financial_analysis.periods import Period, Quarter
 from services.financial_analysis.pl_engine import (
@@ -33,6 +35,7 @@ USE_CASE = "financial_analysis"
 MODULE = "Financial Analysis Report"
 UPLOAD_DIR = settings.UPLOAD_DIR / "financial_analysis"
 MAPPING_DIR = UPLOAD_DIR / "mapping"
+BUDGET_DIR  = UPLOAD_DIR / "budget"
 OUTPUT_DIR = settings.OUTPUT_DIR / "financial_analysis"
 FILENAME_PATTERN = re.compile(r"^Financial_Analysis_Q[1-4]_\d{4}_[0-9a-f]{8}\.docx$")
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
@@ -92,11 +95,14 @@ def get_status(
 ):
     records = tb_store.list_periods(db)
     loaded = {Period(r.period_year, r.period_month) for r in records}
+    budgets = budget_store.list_budgets(BUDGET_DIR)
     return {
         "periods": [_period_json(r) for r in records],
         "mapping": mapping_store.mapping_info(MAPPING_DIR),
+        "budgets": budgets,
+        "budget": budgets[0] if budgets else None,
         "quarters": _quarter_options(loaded),
-        "budget_available": False,
+        "budget_available": len(budgets) > 0,
     }
 
 
@@ -158,6 +164,79 @@ def delete_trial_balance(
         user_id=current_user.id, user_name=current_user.full_name, request=request,
     )
     return {"status": "deleted", "period": period.label}
+
+
+@financial_analysis_router.post("/budget")
+async def upload_budgets(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    ytd_cumulate: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Reads one or more budget workbooks (monthly YTD budget files or multi-month workbooks). Each is stored by period."""
+    results = []
+    for file in files:
+        path = await _save_upload(file)
+        try:
+            loaded_periods = await run_in_threadpool(
+                budget_store.save_budget_file, BUDGET_DIR, path, file.filename,
+                current_user.full_name, ytd_cumulate,
+            )
+            for item in loaded_periods:
+                results.append(item)
+                log_audit(
+                    db=db, action="Upload FA Budget", module=MODULE,
+                    description=f"{'Replaced' if item.get('status') == 'replaced' else 'Loaded'} FA budget {item.get('period')} from {file.filename}",
+                    user_id=current_user.id, user_name=current_user.full_name, request=request,
+                )
+        except BudgetFormatError as exc:
+            results.append({"filename": file.filename, "status": "error", "error": str(exc)})
+        except Exception as exc:
+            logger.exception(f"Budget upload failed for {file.filename}: {exc}")
+            results.append({"filename": file.filename, "status": "error", "error": f"Could not read the file: {exc}"})
+        finally:
+            path.unlink(missing_ok=True)
+    return {"results": results, "budgets": budget_store.list_budgets(BUDGET_DIR)}
+
+
+@financial_analysis_router.delete("/budget/{year}/{month}")
+def delete_budget(
+    year: int,
+    month: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Remove the stored FA budget for a specific period."""
+    try:
+        period = Period(year, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not budget_store.delete_budget(BUDGET_DIR, year, month):
+        raise HTTPException(status_code=404, detail=f"No budget loaded for {period.label}.")
+    log_audit(
+        db=db, action="Delete FA Budget", module=MODULE,
+        description=f"Deleted FA budget for {period.label}",
+        user_id=current_user.id, user_name=current_user.full_name, request=request,
+    )
+    return {"status": "deleted", "period": period.label}
+
+
+@financial_analysis_router.delete("/budget")
+def clear_all_budgets(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Remove all stored FA budgets."""
+    deleted_count = budget_store.clear_all_budgets(BUDGET_DIR)
+    log_audit(
+        db=db, action="Clear FA Budgets", module=MODULE,
+        description=f"Cleared {deleted_count} FA budget files",
+        user_id=current_user.id, user_name=current_user.full_name, request=request,
+    )
+    return {"status": "deleted", "count": deleted_count}
 
 
 @financial_analysis_router.post("/mapping")
@@ -227,9 +306,13 @@ async def generate_financial_analysis(
     if mapping is None:
         raise HTTPException(status_code=422, detail="Upload the GL code mapping workbook first.")
 
+    # Load budget data if available
+    b_end = budget_store.load_budget(BUDGET_DIR, quarter.end)
+    b_start = budget_store.load_budget(BUDGET_DIR, quarter.previous().end) if quarter.quarter > 1 else None
+
     load = lru_cache(maxsize=None)(lambda period: tb_store.load_ytd(db, period))
     try:
-        analysis = build_analysis(quarter, load, mapping)
+        analysis = build_analysis(quarter, load, mapping, budget_end=b_end, budget_start=b_start)
     except MissingPeriodsError as exc:
         raise HTTPException(
             status_code=422,

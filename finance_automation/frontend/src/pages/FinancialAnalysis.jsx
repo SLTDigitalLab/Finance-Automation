@@ -28,14 +28,18 @@ import {
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
   TableChart as MappingIcon,
+  AccountBalance as BudgetIcon,
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
 } from "@mui/icons-material";
 import {
+  deleteFABudget,
   deleteTrialBalance,
   downloadFinancialAnalysis,
   generateFinancialAnalysis,
   getFinancialAnalysisStatus,
+  uploadFABudget,
+  uploadFABudgets,
   uploadGlMapping,
   uploadTrialBalances,
 } from "../services/api";
@@ -163,6 +167,7 @@ export default function FinancialAnalysis() {
   const navigate = useNavigate();
   const tbInputRef = useRef(null);
   const mappingInputRef = useRef(null);
+  const budgetInputRef = useRef(null);
   const currentYear = new Date().getFullYear();
 
   const [status, setStatus] = useState(null);
@@ -171,6 +176,12 @@ export default function FinancialAnalysis() {
 
   const [mappingUploading, setMappingUploading] = useState(false);
   const [mappingResult, setMappingResult] = useState(null);
+
+  const [budgetFiles, setBudgetFiles] = useState([]);
+  const [budgetDragging, setBudgetDragging] = useState(false);
+  const [budgetUploading, setBudgetUploading] = useState(false);
+  const [budgetResults, setBudgetResults] = useState([]);
+  const [budgetDeleting, setBudgetDeleting] = useState("");
 
   const [tbFiles, setTbFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -230,6 +241,49 @@ export default function FinancialAnalysis() {
       setError(err.message || "Failed to upload the GL code mapping");
     } finally {
       setMappingUploading(false);
+    }
+  };
+
+  const addBudgetFiles = (fileList) => {
+    const selected = Array.from(fileList || []);
+    if (!selected.length) return;
+    const problems = selected.map(validateFile).filter(Boolean);
+    setError(problems.join(" "));
+    setBudgetResults([]);
+    setBudgetFiles((current) => {
+      const names = new Set(current.map((f) => f.name));
+      return [...current, ...selected.filter((f) => !validateFile(f) && !names.has(f.name))];
+    });
+    if (budgetInputRef.current) budgetInputRef.current.value = "";
+  };
+
+  const handleBudgetUpload = async () => {
+    if (!budgetFiles.length) return;
+    setBudgetUploading(true);
+    setError("");
+    try {
+      const data = await uploadFABudgets(budgetFiles);
+      setBudgetResults(data.results || []);
+      setBudgetFiles([]);
+      await refreshStatus();
+    } catch (err) {
+      setError(err.message || "Failed to upload budget workbooks");
+    } finally {
+      setBudgetUploading(false);
+    }
+  };
+
+  const handleBudgetDelete = async (period) => {
+    if (!window.confirm(`Remove the ${period.label} budget?`)) return;
+    setBudgetDeleting(period.label);
+    setError("");
+    try {
+      await deleteFABudget(period.year, period.month);
+      await refreshStatus();
+    } catch (err) {
+      setError(err.message || "Failed to remove the budget workbook");
+    } finally {
+      setBudgetDeleting("");
     }
   };
 
@@ -466,9 +520,162 @@ export default function FinancialAnalysis() {
                     )}
                   </SectionCard>
 
-                  {/* 2. Trial balances */}
+                  {/* 2. Budget workbooks (optional) */}
                   <SectionCard
                     step={2}
+                    title="Budget workbooks (optional)"
+                    subtitle="Monthly YTD budget files (e.g. YTD June 26, YTD March 26). When loaded, the report includes Section D: Actuals vs Budget."
+                  >
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => budgetInputRef.current?.click()}
+                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && budgetInputRef.current?.click()}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setBudgetDragging(true);
+                      }}
+                      onDragLeave={() => setBudgetDragging(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setBudgetDragging(false);
+                        addBudgetFiles(e.dataTransfer.files);
+                      }}
+                      className={`mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition ${
+                        budgetDragging ? "border-[#E8A838] bg-amber-50" : "border-slate-300 bg-slate-50 hover:border-[#E8A838] hover:bg-amber-50/60"
+                      }`}
+                    >
+                      <BudgetIcon sx={{ fontSize: 40, color: "#E8A838" }} />
+                      <p className="mt-3 text-sm font-extrabold text-[#082f49]">
+                        Drop one or more budget files here or click to browse
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">.xlsx or .xlsm, e.g. YTD June 26, YTD March 26</p>
+                      <input
+                        ref={budgetInputRef}
+                        type="file"
+                        multiple
+                        accept={ACCEPTED_EXTENSIONS.join(",")}
+                        className="hidden"
+                        onChange={(e) => addBudgetFiles(e.target.files)}
+                      />
+                    </div>
+
+                    {budgetFiles.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        {budgetFiles.map((f) => (
+                          <div
+                            key={f.name}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2.5"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <FileIcon sx={{ color: "#E8A838" }} />
+                              <p className="truncate text-sm font-extrabold text-slate-800">{f.name}</p>
+                            </div>
+                            <Tooltip title="Remove file">
+                              <span>
+                                <Button
+                                  onClick={() => setBudgetFiles((cur) => cur.filter((x) => x.name !== f.name))}
+                                  disabled={budgetUploading}
+                                  sx={{ minWidth: 36, color: "#64748b" }}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          </div>
+                        ))}
+                        <Button
+                          onClick={handleBudgetUpload}
+                          disabled={budgetUploading}
+                          variant="contained"
+                          startIcon={<UploadIcon />}
+                          sx={{ ...BUTTON_SX, mt: 1, backgroundColor: "#E8A838", "&:hover": { backgroundColor: "#d4962c" } }}
+                        >
+                          {budgetUploading ? "Reading files…" : `Load ${budgetFiles.length} budget file${budgetFiles.length > 1 ? "s" : ""}`}
+                        </Button>
+                        {budgetUploading && <LinearProgress sx={{ mt: 1, borderRadius: 1 }} />}
+                      </div>
+                    )}
+
+                    {budgetResults.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        {budgetResults.map((r, i) => (
+                          <Alert
+                            key={(r.filename || "") + (r.period || "") + i}
+                            severity={r.status === "error" ? "error" : "success"}
+                            icon={r.status === "error" ? <WarningIcon /> : <CheckCircleIcon />}
+                          >
+                            <b>{r.filename}</b>:{" "}
+                            {r.status === "error" ? (
+                              r.error
+                            ) : (
+                              <>
+                                {r.status === "replaced" ? "Replaced" : "Loaded"} <b>{r.period}</b>
+                                {r.lines_count ? ` (${r.lines_count} lines)` : ""}
+                                {r.operating_cost_ytd != null ? ` · Total Opex YTD: LKR ${Number(r.operating_cost_ytd).toLocaleString(undefined, { maximumFractionDigits: 1 })} Mn` : ""}
+                              </>
+                            )}
+                          </Alert>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-5">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Loaded budget periods ({(status?.budgets || []).length})
+                      </p>
+                      {status && (status.budgets || []).length === 0 ? (
+                        <p className="mt-2 text-sm font-semibold text-slate-400">
+                          No budget workbooks loaded yet (optional).
+                        </p>
+                      ) : (
+                        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                          <table className="w-full border-collapse text-left text-xs">
+                            <thead className="border-b border-slate-200 bg-slate-50 font-extrabold text-slate-600">
+                              <tr>
+                                <th className="px-4 py-2.5">Period</th>
+                                <th className="px-4 py-2.5">Source file</th>
+                                <th className="px-4 py-2.5">Lines / Details</th>
+                                <th className="px-4 py-2.5">Uploaded</th>
+                                <th className="px-4 py-2.5 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
+                              {(status?.budgets || []).map((b) => (
+                                <tr key={`${b.year}-${b.month}`}>
+                                  <td className="px-4 py-2.5 font-extrabold text-slate-900">{b.label}</td>
+                                  <td className="px-4 py-2.5 text-slate-600">{b.filename}</td>
+                                  <td className="px-4 py-2.5 text-slate-600">
+                                    {b.lines_count ? `${b.lines_count} lines` : ""}
+                                    {b.operating_cost_ytd != null ? ` · Opex: LKR ${Number(b.operating_cost_ytd).toLocaleString(undefined, { maximumFractionDigits: 1 })} Mn` : ""}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-slate-500">
+                                    {formatDate(b.uploaded_at)}
+                                    {b.uploaded_by ? ` by ${b.uploaded_by}` : ""}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    <Button
+                                      size="small"
+                                      color="error"
+                                      disabled={budgetDeleting === b.label}
+                                      onClick={() => handleBudgetDelete(b)}
+                                      sx={{ minWidth: "auto", p: 0.5 }}
+                                    >
+                                      {budgetDeleting === b.label ? "…" : <DeleteIcon fontSize="small" />}
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </SectionCard>
+
+                  {/* 3. Trial balances */}
+                  <SectionCard
+                    step={3}
                     title="Trial balances"
                     subtitle="Detail TB exports (A/c, GL code, Beginning balance, PTD, YTD). The month is read from the YTD header; loading a month again replaces it."
                   >
@@ -596,8 +803,8 @@ export default function FinancialAnalysis() {
                     </div>
                   </SectionCard>
 
-                  {/* 3. Generate */}
-                  <SectionCard step={3} title="Generate the Word report">
+                  {/* 4. Generate */}
+                  <SectionCard step={4} title="Generate the Word report">
                     {status && status.quarters.length === 0 ? (
                       <p className="mt-3 text-sm font-semibold text-slate-500">
                         Load a quarter-end trial balance (Mar, Jun, Sep or Dec) to choose a quarter.

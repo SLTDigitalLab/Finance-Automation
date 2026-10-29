@@ -864,3 +864,31 @@ export async function downloadFinancialAnalysis(filename) {
   URL.revokeObjectURL(localUrl);
 }
 
+export async function uploadFABudgets(files, ytdCumulate = false) {
+  const formData = new FormData();
+  const fileList = Array.isArray(files) ? files : [files];
+  for (const f of fileList) {
+    formData.append("files", f);
+  }
+  const url = `${API_BASE}/financial-analysis/budget${ytdCumulate ? "?ytd_cumulate=true" : ""}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to upload budget workbooks");
+}
+
+export const uploadFABudget = uploadFABudgets;
+
+export async function deleteFABudget(year, month) {
+  const url = year && month
+    ? `${API_BASE}/financial-analysis/budget/${year}/${month}`
+    : `${API_BASE}/financial-analysis/budget`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to remove the budget workbook");
+}
+

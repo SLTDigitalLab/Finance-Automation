@@ -35,7 +35,7 @@ from docx.text.paragraph import Paragraph
 
 from services.financial_analysis import commentary
 from services.financial_analysis.commentary import money, percent
-from services.financial_analysis.pl_engine import Comparison, FinancialAnalysis, MonthFigures
+from services.financial_analysis.pl_engine import Comparison, FinancialAnalysis, MonthFigures, BudgetFigures
 from services.financial_analysis.periods import Period, Quarter
 from utils.logger import logger
 
@@ -212,8 +212,8 @@ def _set_color(tc, color: Optional[str]):
                 r_pr.append(el)
 
 
-def _favour_color(diff: float, cost: bool) -> Optional[str]:
-    if abs(diff) < 0.5:
+def _favour_color(diff: Optional[float], cost: bool = False, min_abs: float = 1e-6) -> Optional[str]:
+    if diff is None or abs(diff) < min_abs:
         return None
     return FAVOURABLE if (diff < 0 if cost else diff > 0) else UNFAVOURABLE
 
@@ -306,7 +306,9 @@ def _fill_income_statement(tbl, comparison: Comparison, spec: SectionSpec):
         diff, pct = _growth(getter(cur), getter(base))
         for tc, value in zip(cells[1:], [money(getter(cur)), money(getter(base)), money(diff), percent(pct)]):
             _set_cell(tc, value)
-        _set_color(cells[-1], _favour_color(diff, cost=_norm(_text(cells[0])) == "opex"))
+        col = _favour_color(diff, cost=(_norm(_text(cells[0])) == "opex"))
+        _set_color(cells[3], col)
+        _set_color(cells[4], col)
 
 
 def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quarter):
@@ -333,7 +335,9 @@ def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quart
         for tc, value in zip(cells[6:10], [money(cur_val), money(base_val), money(diff), percent(pct)]):
             _set_cell(tc, value)
             _size_like_cell(tc)
-        _set_color(cells[9], _favour_color(diff, cost=(label == "opex")))
+        col = _favour_color(diff, cost=(label == "opex"))
+        _set_color(cells[8], col)
+        _set_color(cells[9], col)
 
 
 def _fill_rows(tbl, header_rows: int, values: List[List[str]], colors: Sequence[Optional[str]] = ()):
@@ -348,6 +352,7 @@ def _fill_rows(tbl, header_rows: int, values: List[List[str]], colors: Sequence[
         for tc, value in zip(_cells(tr), row_values):
             _set_cell(tc, value)
         if i < len(colors):
+            _set_color(_cells(tr)[-2], colors[i])
             _set_color(_cells(tr)[-1], colors[i])
         tbl.append(tr)
 
@@ -364,7 +369,7 @@ def _driver_rows(comparison: Comparison, line: str, cost: bool):
     return rows, colors
 
 
-def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period):
+def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period, budget: Optional[BudgetFigures] = None):
     """Fills the P&L lines supported by the trial balance, keeping other rows intact."""
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[1])
@@ -379,6 +384,9 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period)
         "ebitdamargin": "ebitda", "operatingprofitmargin": "operating_profit",
         "pbtmargin": "profit_before_tax", "patmargin": "profit_after_tax",
     }
+    rev = cur.lines.get("revenue", 0.0)
+    base_rev = base.lines.get("revenue", 0.0)
+
     for tr in rows[2:]:
         cells = _cells(tr)
         label = _norm(_text(cells[0]))
@@ -386,19 +394,45 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period)
             continue
         if label in amounts:
             key = amounts[label]
-            _, pct = _growth(cur.lines[key], base.lines[key])
+            diff, pct = _growth(cur.lines[key], base.lines[key])
             _set_cell(cells[1], money(cur.lines[key]))
             _set_cell(cells[2], money(base.lines[key]))
             _set_cell(cells[3], percent(pct))
+            _set_color(cells[3], _favour_color(diff, cost=False))
         elif label in margins:
             key = margins[label]
             c, b = cur.margin(key), base.margin(key)
+            m_diff = _margin_change(c, b)
             _set_cell(cells[1], percent(c))
             _set_cell(cells[2], percent(b))
-            _set_cell(cells[3], percent(_margin_change(c, b)))
+            _set_cell(cells[3], percent(m_diff))
+            _set_color(cells[3], _favour_color(m_diff, cost=False))
+        elif label == "staffcosttorevenue" and budget and len(cells) >= 6:
+            act_staff = budget.ytd_staff_actual
+            ly_staff = budget.ytd_staff_ly_actual
+            bud_staff = budget.ytd_staff_costs
+
+            act_ratio = (act_staff / rev) if (act_staff and rev > 0) else None
+            ly_ratio = (ly_staff / base_rev) if (ly_staff and base_rev > 0) else None
+            bud_ratio = (bud_staff / rev) if (bud_staff and rev > 0) else None
+
+            if act_ratio is not None:
+                _set_cell(cells[1], percent(act_ratio))
+            if ly_ratio is not None:
+                _set_cell(cells[2], percent(ly_ratio))
+            if act_ratio is not None and ly_ratio is not None:
+                yoy_diff = act_ratio - ly_ratio
+                _set_cell(cells[3], percent(yoy_diff))
+                _set_color(cells[3], _favour_color(yoy_diff, cost=True))
+            if bud_ratio is not None:
+                _set_cell(cells[4], percent(bud_ratio))
+            if act_ratio is not None and bud_ratio is not None:
+                bud_diff = act_ratio - bud_ratio
+                _set_cell(cells[5], percent(bud_diff))
+                _set_color(cells[5], _favour_color(bud_diff, cost=True))
 
 
-def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period):
+def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period, budget: Optional[BudgetFigures] = None):
     """Updates key ratios supported by the trial balance, keeping other rows intact."""
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[2])[1:]
@@ -417,12 +451,42 @@ def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period):
         "netprofitmargin": [percent(cur.margin("profit_after_tax")), percent(base.margin("profit_after_tax"))],
         "interestcoverageratiotimes": [coverage(cur), coverage(base)],
     }
+    rev = cur.lines.get("revenue", 0.0)
+    base_rev = base.lines.get("revenue", 0.0)
+
     for tr in rows[3:]:
         cells = _cells(tr)
-        values = ratios.get(_norm(_text(cells[0])))
+        label = _norm(_text(cells[0]))
+        values = ratios.get(label)
         if values:
             for tc, value in zip(cells[1:], values):
                 _set_cell(tc, value)
+        if label == "revenuegrowthyoy":
+            _set_color(cells[1], _favour_color(growth, cost=False))
+
+        # Update budget and actual columns for expense ratios when budget figures are present
+        if budget and rev > 0 and len(cells) >= 4:
+            if label == "directexpensestorevenue":
+                if budget.ytd_direct_actual:
+                    _set_cell(cells[1], percent(budget.ytd_direct_actual / rev))
+                if budget.ytd_direct_ly_actual and base_rev > 0:
+                    _set_cell(cells[2], percent(budget.ytd_direct_ly_actual / base_rev))
+                if budget.ytd_direct_expenses:
+                    _set_cell(cells[3], percent(budget.ytd_direct_expenses / rev))
+            elif label == "salesmarketingexpensestorevenue":
+                if budget.ytd_sales_mktg_actual:
+                    _set_cell(cells[1], percent(budget.ytd_sales_mktg_actual / rev))
+                if budget.ytd_sales_mktg_ly_actual and base_rev > 0:
+                    _set_cell(cells[2], percent(budget.ytd_sales_mktg_ly_actual / base_rev))
+                if budget.ytd_sales_mktg_expenses:
+                    _set_cell(cells[3], percent(budget.ytd_sales_mktg_expenses / rev))
+            elif label == "generaladministrationexpensestorevenue":
+                if budget.ytd_ga_actual:
+                    _set_cell(cells[1], percent(budget.ytd_ga_actual / rev))
+                if budget.ytd_ga_ly_actual and base_rev > 0:
+                    _set_cell(cells[2], percent(budget.ytd_ga_ly_actual / base_rev))
+                if budget.ytd_ga_costs:
+                    _set_cell(cells[3], percent(budget.ytd_ga_costs / rev))
 
 
 def _update_cover(body_elements, q: Quarter):
@@ -529,6 +593,77 @@ def _update_section_commentary(doc: Document, letter: str, comparison: Compariso
         for k in range(prf_k + 1, end_idx):
             if paras[k].text.strip():
                 _set_text(paras[k]._element, " ".join(commentary.profit_paragraphs(comparison, spec.current_label, spec.base_label)))
+                break
+
+
+def _update_section_d_commentary(doc: Document, q: Quarter, comparison: Comparison, budget: BudgetFigures):
+    paras = doc.paragraphs
+    sec_idx = -1
+    for i, p in enumerate(paras):
+        if "performanceofthecurrentquarteractualsagainstthebudget" in _norm(p.text):
+            sec_idx = i
+            break
+    if sec_idx == -1:
+        return
+    slt_idx = -1
+    for i in range(sec_idx, len(paras)):
+        if _norm(paras[i].text) == "sltplc":
+            slt_idx = i
+            break
+    if slt_idx == -1:
+        return
+    end_idx = len(paras)
+    for i in range(slt_idx + 1, len(paras)):
+        t = _norm(paras[i].text)
+        if t == "mobitel" or ("performanceof" in t and "performanceofthecurrent" in t):
+            end_idx = i
+            break
+
+    subheads = {}
+    for k in range(slt_idx, end_idx):
+        t = _norm(paras[k].text)
+        if t in ("revenue", "opex", "profits"):
+            subheads[t] = k
+
+    if "opex" in subheads and budget.quarter_opex:
+        opx_k = subheads["opex"]
+        next_k = subheads.get("profits", end_idx)
+        cur_opex = -comparison.current.lines.get("operating_costs", 0.0)
+        bud_opex = budget.quarter_opex
+        diff = cur_opex - bud_opex
+        diff_pct = abs(diff) / bud_opex * 100 if bud_opex else 0
+        verb = "exceeded" if diff > 0 else "managed below"
+
+        details = []
+        if budget.quarter_direct_budget and budget.quarter_direct_actual:
+            d_diff = budget.quarter_direct_actual - budget.quarter_direct_budget
+            d_pct = abs(d_diff) / budget.quarter_direct_budget * 100
+            d_v = "exceeded budget by" if d_diff > 0 else "managed below budget by"
+            details.append(f"Direct Expenses {d_v} {d_pct:.1f}% (LKR {abs(round(d_diff)):,.0f} Mn)")
+        if budget.quarter_sales_mktg_budget and budget.quarter_sales_mktg_actual:
+            sm_diff = budget.quarter_sales_mktg_actual - budget.quarter_sales_mktg_budget
+            sm_pct = abs(sm_diff) / budget.quarter_sales_mktg_budget * 100
+            sm_v = "exceeded budget by" if sm_diff > 0 else "managed below budget by"
+            details.append(f"Sales & Marketing {sm_v} {sm_pct:.1f}% (LKR {abs(round(sm_diff)):,.0f} Mn)")
+        if budget.quarter_ga_budget and budget.quarter_ga_actual:
+            ga_diff = budget.quarter_ga_actual - budget.quarter_ga_budget
+            ga_pct = abs(ga_diff) / budget.quarter_ga_budget * 100
+            ga_v = "exceeded budget by" if ga_diff > 0 else "managed below budget by"
+            details.append(f"General & Admin costs {ga_v} {ga_pct:.1f}% (LKR {abs(round(ga_diff)):,.0f} Mn)")
+        if budget.quarter_staff_budget and budget.quarter_staff_actual:
+            st_diff = budget.quarter_staff_actual - budget.quarter_staff_budget
+            st_pct = abs(st_diff) / budget.quarter_staff_budget * 100
+            st_v = "exceeded" if st_diff > 0 else "contained within"
+            details.append(f"Staff costs were {st_v} budget at LKR {round(budget.quarter_staff_actual):,.0f} Mn ({st_pct:.1f}%)")
+
+        detail_sentence = " " + "; ".join(details) + "." if details else " Staff costs and operational expenses were managed in line with corporate targets."
+        text = (
+            f"Operational cost of {_q_short(q)} has {verb} the budget by {diff_pct:.1f}% "
+            f"(LKR {abs(round(diff)):,.0f} Mn).{detail_sentence}"
+        )
+        for k in range(opx_k + 1, next_k):
+            if paras[k].text.strip():
+                _set_text(paras[k]._element, text)
                 break
 
 
@@ -753,8 +888,9 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
 
     # 3. Update Financial Statistics
     ytd = analysis.comparisons["ytd_vs_last_year"]
-    _update_financial_summary(doc.tables[0]._element, ytd, q.end, q.same_quarter_last_year().end)
-    _update_key_ratios(doc.tables[1]._element, ytd, q.end, q.same_quarter_last_year().end)
+    budget = inputs.analysis.budget
+    _update_financial_summary(doc.tables[0]._element, ytd, q.end, q.same_quarter_last_year().end, budget)
+    _update_key_ratios(doc.tables[1]._element, ytd, q.end, q.same_quarter_last_year().end, budget)
 
     # 4. Update Section A (Current Quarter vs Same Quarter Last Year)
     _update_group_table(doc.tables[4]._element, yoy, specs[0], q)
@@ -794,9 +930,59 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
         cur_q_lines = yoy.current.lines
         for tr in t13.findall(qn("w:tr"))[2:]:
             cells = _cells(tr)
-            getter = IS_ROWS.get(_norm(_text(cells[0])))
+            label = _norm(_text(cells[0]))
+            getter = IS_ROWS.get(label)
             if getter is not None:
                 _set_cell(cells[1], money(getter(cur_q_lines)))
+            if label == "opex" and budget and budget.quarter_opex is not None:
+                act_opex = -cur_q_lines["operating_costs"]
+                bud_opex = budget.quarter_opex
+                diff = act_opex - bud_opex
+                pct = diff / bud_opex if bud_opex else None
+                _set_cell(cells[2], money(bud_opex))
+                _set_cell(cells[3], money(diff))
+                _set_cell(cells[4], percent(pct))
+                col = _favour_color(diff, cost=True)
+                _set_color(cells[3], col)
+                _set_color(cells[4], col)
+            elif label != "opex":
+                if _text(cells[2]).strip() in ("xx,xxx", "xxxx", "x,xxx", "-"):
+                    _set_cell(cells[2], "-")
+                if _text(cells[3]).strip() in ("xxx", "( xxx )", "(xxx)", "-"):
+                    _set_cell(cells[3], "-")
+                    _set_color(cells[3], None)
+                if "x" in _text(cells[4]).lower() or _text(cells[4]).strip() == "-":
+                    _set_cell(cells[4], "-")
+                    _set_color(cells[4], None)
+
+        if budget and budget.quarter_direct_budget is not None:
+            expense_rows = [
+                ("Direct Expenses", budget.quarter_direct_actual, budget.quarter_direct_budget),
+                ("Sales & Marketing", budget.quarter_sales_mktg_actual, budget.quarter_sales_mktg_budget),
+                ("General & Administration", budget.quarter_ga_actual, budget.quarter_ga_budget),
+                ("Staff Costs", budget.quarter_staff_actual, budget.quarter_staff_budget),
+            ]
+            proto_tr = t13.findall(qn("w:tr"))[-1]
+            for row_label, act_val, bud_val in expense_rows:
+                if act_val is None or bud_val is None:
+                    continue
+                tr = copy.deepcopy(proto_tr)
+                c = _cells(tr)
+                diff_val = act_val - bud_val
+                pct_val = diff_val / bud_val if bud_val else None
+                _set_cell(c[0], row_label)
+                _set_cell(c[1], money(act_val))
+                _set_cell(c[2], money(bud_val))
+                _set_cell(c[3], money(diff_val))
+                _set_cell(c[4], percent(pct_val))
+                col = _favour_color(diff_val, cost=True)
+                _set_color(c[3], col)
+                _set_color(c[4], col)
+                t13.append(tr)
+
+    # Update Section D commentary if budget is loaded
+    if budget and budget.quarter_opex is not None:
+        _update_section_d_commentary(doc, q, yoy, budget)
 
     # Update section headings
     _update_section_headings(doc, q, specs)
@@ -828,8 +1014,11 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
 
     b.title("Data notes")
     notes = list(inputs.data_notes)
-    notes.append("Budget figures have not been loaded, so section (D) shows the template's budget "
-                 "placeholders until a budget file is provided.")
+    if not analysis.budget_available:
+        notes.append("Budget figures have not been loaded, so section (D) shows the template's budget "
+                     "placeholders until a budget file is provided.")
+    else:
+        notes.append(f"Budget figures loaded for {q.label}: section (D) shows actuals vs budget comparison.")
     for u in analysis.unmapped:
         notes.append(f"Account {u.account} {u.name.strip()} ({u.period}, LKR {u.amount:,.1f} Mn) "
                      "is not in the GL mapping and is excluded from the P&L.")
