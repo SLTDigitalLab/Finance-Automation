@@ -442,7 +442,7 @@ export default function FinancialAnalysis() {
 
       <div className="min-h-screen bg-[linear-gradient(180deg,#edf4fb_0%,#f8fafc_46%,#eef3f8_100%)] font-sans text-slate-900">
         <div className="flex min-h-screen">
-          <aside className="hidden w-[284px] shrink-0 flex-col justify-between border-r border-white/10 bg-[#071b2a] text-white shadow-[18px_0_48px_rgba(7,27,42,0.16)] lg:flex">
+          <aside className="sticky top-0 hidden h-screen w-[284px] shrink-0 flex-col justify-between overflow-y-auto border-r border-white/10 bg-[#071b2a] text-white shadow-[18px_0_48px_rgba(7,27,42,0.16)] lg:flex">
             <div>
               <div className="px-7 pb-6 pt-7">
                 <div className="rounded-lg border border-white/10 bg-white/8 p-4">
