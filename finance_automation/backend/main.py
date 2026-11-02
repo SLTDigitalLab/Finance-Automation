@@ -14,6 +14,7 @@ from app.routes.forecasting import forecast_router
 from app.routes.anomaly_routes import anomaly_router
 from app.routes.board_pack_routes import board_pack_router
 from app.routes.financial_analysis_routes import financial_analysis_router
+from app.routes.remaining_inputs_routes import remaining_inputs_router
 from app.routes.use_case_routes import use_case_router
 from utils.logger import logger
 
@@ -39,6 +40,7 @@ app.include_router(forecast_router)
 app.include_router(anomaly_router)
 app.include_router(board_pack_router)
 app.include_router(financial_analysis_router)
+app.include_router(remaining_inputs_router)
 app.include_router(use_case_router)
 
 

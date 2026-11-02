@@ -21,6 +21,10 @@ from services.financial_analysis import mapping_store, tb_store
 from services.financial_analysis.budget_reader import BudgetFormatError
 from services.financial_analysis import budget_store
 from services.financial_analysis.mapping_reader import MappingFormatError
+from services.financial_analysis import remaining_inputs_store
+from services.financial_analysis.group_pl_reader import GroupPLReader
+from services.financial_analysis.mobitel_writeup_reader import MobitelWriteupReader
+from services.financial_analysis.validation_dashboard import build_validation_dashboard
 from services.financial_analysis.periods import Period, Quarter
 from services.financial_analysis.pl_engine import (
     MissingPeriodsError, build_analysis, monthly_trend, required_periods,
@@ -330,7 +334,34 @@ async def generate_financial_analysis(
               f"(YTD total {r.net_ytd:,.2f})" for r in used if abs(r.net_ytd) > 100]
 
     try:
-        output_path = await run_in_threadpool(generate_report, ReportInputs(analysis, trend, notes), OUTPUT_DIR)
+    # Load remaining inputs if present
+        mobitel_writeup = None
+        mob_path = remaining_inputs_store.load_file("mobitel_writeup")
+        if mob_path and mob_path.exists():
+            try:
+                mobitel_writeup = await run_in_threadpool(MobitelWriteupReader().read, mob_path)
+                notes.append(f"Mobitel narrative enriched from write-up: {mob_path.name}")
+            except Exception as exc:
+                logger.warning(f"Could not read Mobitel write-up: {exc}")
+
+        group_pl_data = None
+        grp_path = remaining_inputs_store.load_file("group_pl")
+        if grp_path and grp_path.exists():
+            try:
+                group_pl_data = await run_in_threadpool(GroupPLReader().read, grp_path)
+                notes.append(f"Group & Mobitel figures enriched from Group P&L: {grp_path.name}")
+            except Exception as exc:
+                logger.warning(f"Could not read Group P&L: {exc}")
+
+        val_dashboard = build_validation_dashboard(analysis, mobitel_writeup, group_pl_data)
+
+        output_path = await run_in_threadpool(
+            generate_report,
+            ReportInputs(analysis, trend, notes),
+            OUTPUT_DIR,
+            mobitel_writeup=mobitel_writeup,
+            group_pl_data=group_pl_data,
+        )
     except ReportTemplateError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
@@ -354,6 +385,11 @@ async def generate_financial_analysis(
                     for k, v in analysis.comparisons["quarter_vs_last_year"].current.margins.items()},
         "budget_available": analysis.budget_available,
         "warnings": warnings,
+        "validation_dashboard": val_dashboard.to_dict(),
+        "enrichments": {
+            "mobitel_narrative": mobitel_writeup is not None,
+            "group_pl": group_pl_data is not None,
+        },
     }
 
 

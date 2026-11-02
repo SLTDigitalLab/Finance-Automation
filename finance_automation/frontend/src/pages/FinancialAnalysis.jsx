@@ -28,19 +28,31 @@ import {
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
   TableChart as MappingIcon,
+  Article as DocxIcon,
+  Assessment as GroupIcon,
+  CheckCircleOutline as CompletedIcon,
+  ErrorOutline as ConflictIcon,
+  ExpandLess as ExpandLessIcon,
+  ExpandMore as ExpandMoreIcon,
+  HourglassEmpty as MissingIcon,
+  Tune as EnrichIcon,
   AccountBalance as BudgetIcon,
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
 } from "@mui/icons-material";
 import {
   deleteFABudget,
+  deleteRemainingInput,
   deleteTrialBalance,
   downloadFinancialAnalysis,
   generateFinancialAnalysis,
   getFinancialAnalysisStatus,
   uploadFABudget,
   uploadFABudgets,
+  getRemainingInputsStatus,
   uploadGlMapping,
+  uploadGroupPL,
+  uploadMobitelWriteup,
   uploadTrialBalances,
 } from "../services/api";
 import { visibleNavItems } from "../config/useCases";
@@ -194,6 +206,16 @@ export default function FinancialAnalysis() {
   const [downloading, setDownloading] = useState(false);
   const [result, setResult] = useState(null);
 
+  const [remainingInputs, setRemainingInputs] = useState(null);
+  const [mobitelUploading, setMobitelUploading] = useState(false);
+  const [mobitelDragging, setMobitelDragging] = useState(false);
+  const [groupPlUploading, setGroupPlUploading] = useState(false);
+  const [groupPlDragging, setGroupPlDragging] = useState(false);
+  const [deletingRemaining, setDeletingRemaining] = useState("");
+  const [showValidationDetails, setShowValidationDetails] = useState(false);
+  const mobitelInputRef = useRef(null);
+  const groupPlInputRef = useRef(null);
+
   const refreshStatus = useCallback(async () => {
     try {
       const data = await getFinancialAnalysisStatus();
@@ -210,9 +232,19 @@ export default function FinancialAnalysis() {
     }
   }, []);
 
+  const refreshRemainingInputs = useCallback(async () => {
+    try {
+      const data = await getRemainingInputsStatus();
+      setRemainingInputs(data);
+    } catch (err) {
+      console.warn("Could not load remaining inputs status", err);
+    }
+  }, []);
+
   useEffect(() => {
     refreshStatus();
-  }, [refreshStatus]);
+    refreshRemainingInputs();
+  }, [refreshStatus, refreshRemainingInputs]);
 
   const quarter = useMemo(
     () => status?.quarters.find((q) => q.label === selectedQuarter) || null,
@@ -327,6 +359,50 @@ export default function FinancialAnalysis() {
       setError(err.message || "Failed to remove the trial balance");
     } finally {
       setDeleting("");
+    }
+  };
+
+
+  const handleMobitelSelected = async (file) => {
+    if (!file) return;
+    setMobitelUploading(true);
+    setError("");
+    try {
+      await uploadMobitelWriteup(file);
+      await refreshRemainingInputs();
+    } catch (err) {
+      setError(err.message || "Failed to upload Mobitel Write-up");
+    } finally {
+      setMobitelUploading(false);
+    }
+  };
+
+  const handleGroupPlSelected = async (file) => {
+    if (!file) return;
+    setGroupPlUploading(true);
+    setError("");
+    try {
+      await uploadGroupPL(file);
+      await refreshRemainingInputs();
+    } catch (err) {
+      setError(err.message || "Failed to upload Group Financial P and L");
+    } finally {
+      setGroupPlUploading(false);
+    }
+  };
+
+  const handleDeleteRemaining = async (fileType) => {
+    const label = fileType === "mobitel_writeup" ? "Mobitel Management Write-up" : "Group Financial P and L";
+    if (!window.confirm(`Remove the ${label}?`)) return;
+    setDeletingRemaining(fileType);
+    setError("");
+    try {
+      await deleteRemainingInput(fileType);
+      await refreshRemainingInputs();
+    } catch (err) {
+      setError(err.message || "Failed to remove remaining input file");
+    } finally {
+      setDeletingRemaining("");
     }
   };
 
@@ -803,8 +879,331 @@ export default function FinancialAnalysis() {
                     </div>
                   </SectionCard>
 
-                  {/* 4. Generate */}
-                  <SectionCard step={4} title="Generate the Word report">
+                  {/* 4. Mobitel Management Write-up */}
+                  <SectionCard
+                    step={4}
+                    title="Mobitel Management Write-up"
+                    subtitle="Upload Mobitel Management Write-up (.docx) to populate narrative commentary, performance explanations, and operational drivers."
+                  >
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        p: 3,
+                        mt: 2,
+                        borderRadius: 2.5,
+                        border: mobitelDragging ? "2px dashed #1B6B93" : "1px solid #dce5ee",
+                        backgroundColor: mobitelDragging ? "#f0f7fa" : "#fafcff",
+                        transition: "all 0.2s ease-in-out",
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setMobitelDragging(true);
+                      }}
+                      onDragLeave={() => setMobitelDragging(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setMobitelDragging(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handleMobitelSelected(file);
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className="rounded-lg bg-sky-100 p-2 text-[#1B6B93]">
+                            <DocxIcon />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-black text-[#082f49]">Mobitel Management Write-up</h4>
+                            <p className="text-xs font-semibold text-slate-500">Narrative commentary (.docx)</p>
+                          </div>
+                        </div>
+                        {remainingInputs?.uploads?.mobitel_writeup && (
+                          <Chip
+                            size="small"
+                            label="Enriched"
+                            sx={{ fontWeight: 800, backgroundColor: "#d1fae5", color: "#065f46" }}
+                          />
+                        )}
+                      </div>
+
+                      {remainingInputs?.uploads?.mobitel_writeup ? (
+                        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                          <p className="truncate text-xs font-bold text-slate-800" title={remainingInputs.uploads.mobitel_writeup.filename}>
+                            {remainingInputs.uploads.mobitel_writeup.filename}
+                          </p>
+                          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                            Uploaded {formatDate(remainingInputs.uploads.mobitel_writeup.uploaded_at)}
+                            {remainingInputs.uploads.mobitel_writeup.uploader ? ` by ${remainingInputs.uploads.mobitel_writeup.uploader}` : ""}
+                          </p>
+                          <div className="mt-3 flex items-center justify-between">
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => mobitelInputRef.current?.click()}
+                              disabled={mobitelUploading}
+                              sx={{ textTransform: "none", fontSize: "12px", fontWeight: 700 }}
+                            >
+                              Replace
+                            </Button>
+                            <Button
+                              size="small"
+                              color="error"
+                              onClick={() => handleDeleteRemaining("mobitel_writeup")}
+                              disabled={deletingRemaining === "mobitel_writeup"}
+                              startIcon={<DeleteIcon fontSize="small" />}
+                              sx={{ textTransform: "none", fontSize: "12px", fontWeight: 700 }}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white py-5 px-3 text-center">
+                          <p className="text-xs font-semibold text-slate-600">Drag and drop file here, or browse</p>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<UploadIcon />}
+                            onClick={() => mobitelInputRef.current?.click()}
+                            disabled={mobitelUploading}
+                            sx={{ mt: 2, textTransform: "none", fontWeight: 700, borderColor: "#1B6B93", color: "#1B6B93" }}
+                          >
+                            {mobitelUploading ? "Reading..." : "Select DOCX"}
+                          </Button>
+                        </div>
+                      )}
+                      <input
+                        ref={mobitelInputRef}
+                        type="file"
+                        accept=".docx"
+                        className="hidden"
+                        onChange={(e) => handleMobitelSelected(e.target.files?.[0])}
+                      />
+                      {mobitelUploading && <LinearProgress sx={{ mt: 1.5, borderRadius: 1 }} />}
+                    </Paper>
+                  </SectionCard>
+
+                  {/* 5. Group Financial P&L */}
+                  <SectionCard
+                    step={5}
+                    title="Group Financial P&L"
+                    subtitle="Upload Group Financial P&L (.xlsx, sheet: 1.PL Board) to populate consolidated Group and subsidiary financial figures."
+                  >
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        p: 3,
+                        mt: 2,
+                        borderRadius: 2.5,
+                        border: groupPlDragging ? "2px dashed #0B3041" : "1px solid #dce5ee",
+                        backgroundColor: groupPlDragging ? "#f0f4f7" : "#fafcff",
+                        transition: "all 0.2s ease-in-out",
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setGroupPlDragging(true);
+                      }}
+                      onDragLeave={() => setGroupPlDragging(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setGroupPlDragging(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handleGroupPlSelected(file);
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className="rounded-lg bg-emerald-100 p-2 text-[#0B3041]">
+                            <GroupIcon />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-black text-[#082f49]">Group Financial P&L</h4>
+                            <p className="text-xs font-semibold text-slate-500">Board Pack workbook (.xlsx, sheet: 1.PL Board)</p>
+                          </div>
+                        </div>
+                        {remainingInputs?.uploads?.group_pl && (
+                          <Chip
+                            size="small"
+                            label="Enriched"
+                            sx={{ fontWeight: 800, backgroundColor: "#d1fae5", color: "#065f46" }}
+                          />
+                        )}
+                      </div>
+
+                      {remainingInputs?.uploads?.group_pl ? (
+                        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                          <p className="truncate text-xs font-bold text-slate-800" title={remainingInputs.uploads.group_pl.filename}>
+                            {remainingInputs.uploads.group_pl.filename}
+                          </p>
+                          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                            Uploaded {formatDate(remainingInputs.uploads.group_pl.uploaded_at)}
+                            {remainingInputs.uploads.group_pl.uploader ? ` by ${remainingInputs.uploads.group_pl.uploader}` : ""}
+                          </p>
+                          <div className="mt-3 flex items-center justify-between">
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => groupPlInputRef.current?.click()}
+                              disabled={groupPlUploading}
+                              sx={{ textTransform: "none", fontSize: "12px", fontWeight: 700 }}
+                            >
+                              Replace
+                            </Button>
+                            <Button
+                              size="small"
+                              color="error"
+                              onClick={() => handleDeleteRemaining("group_pl")}
+                              disabled={deletingRemaining === "group_pl"}
+                              startIcon={<DeleteIcon fontSize="small" />}
+                              sx={{ textTransform: "none", fontSize: "12px", fontWeight: 700 }}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white py-5 px-3 text-center">
+                          <p className="text-xs font-semibold text-slate-600">Drag and drop file here, or browse</p>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<UploadIcon />}
+                            onClick={() => groupPlInputRef.current?.click()}
+                            disabled={groupPlUploading}
+                            sx={{ mt: 2, textTransform: "none", fontWeight: 700, borderColor: "#0B3041", color: "#0B3041" }}
+                          >
+                            {groupPlUploading ? "Reading..." : "Select XLSX"}
+                          </Button>
+                        </div>
+                      )}
+                      <input
+                        ref={groupPlInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.xlsm"
+                        className="hidden"
+                        onChange={(e) => handleGroupPlSelected(e.target.files?.[0])}
+                      />
+                      {groupPlUploading && <LinearProgress sx={{ mt: 1.5, borderRadius: 1 }} />}
+                    </Paper>
+
+                    {/* Validation Dashboard */}
+                    {remainingInputs?.validation && (
+                      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                              Validation Dashboard & Completeness
+                            </h4>
+                            <p className="text-[11px] font-semibold text-slate-500">
+                              Status across Executive Summary, Sections A/B/C/D, and Financial Statistics.
+                            </p>
+                          </div>
+                          <Button
+                            size="small"
+                            onClick={() => setShowValidationDetails((prev) => !prev)}
+                            sx={{ textTransform: "none", fontSize: "11px", fontWeight: 700, color: "#1B6B93" }}
+                          >
+                            {showValidationDetails ? "Hide Field Breakdown" : "View Field Breakdown"}
+                          </Button>
+                        </div>
+
+                        {/* Summary Badges */}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Chip
+                            size="small"
+                            label={`Total Fields: ${remainingInputs.validation.total_fields || 0}`}
+                            sx={{ fontWeight: 800, backgroundColor: "#f1f5f9", color: "#334155" }}
+                          />
+                          <Chip
+                            size="small"
+                            icon={<CompletedIcon fontSize="small" sx={{ color: "#059669 !important" }} />}
+                            label={`Completed: ${remainingInputs.validation.completed_fields || 0}`}
+                            sx={{ fontWeight: 800, backgroundColor: "#d1fae5", color: "#065f46" }}
+                          />
+                          {remainingInputs.validation.missing_fields > 0 && (
+                            <Chip
+                              size="small"
+                              icon={<MissingIcon fontSize="small" sx={{ color: "#d97706 !important" }} />}
+                              label={`Missing: ${remainingInputs.validation.missing_fields}`}
+                              sx={{ fontWeight: 800, backgroundColor: "#fef3c7", color: "#92400e" }}
+                            />
+                          )}
+                          {remainingInputs.validation.conflicts?.length > 0 && (
+                            <Chip
+                              size="small"
+                              icon={<ConflictIcon fontSize="small" sx={{ color: "#dc2626 !important" }} />}
+                              label={`Source Conflicts: ${remainingInputs.validation.conflicts.length}`}
+                              sx={{ fontWeight: 800, backgroundColor: "#fee2e2", color: "#991b1b" }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Conflicts Details Box */}
+                        {remainingInputs.validation.conflicts?.length > 0 && (
+                          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3">
+                            <p className="text-xs font-black text-red-900">Source Conflicts Detected</p>
+                            <ul className="mt-1 list-disc pl-5 text-xs text-red-800">
+                              {remainingInputs.validation.conflicts.map((c, i) => (
+                                <li key={i}>
+                                  <b>{c.field_name}</b>: {c.source_a} ({c.value_a}) vs {c.source_b} ({c.value_b}) — {c.note}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Expandable Field Breakdown Table */}
+                        {showValidationDetails && (
+                          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-200 bg-slate-100 text-left font-black text-slate-600">
+                                  <th className="py-2 px-3">Field Name</th>
+                                  <th className="py-2 px-3">Section</th>
+                                  <th className="py-2 px-3">Source</th>
+                                  <th className="py-2 px-3 text-right">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {remainingInputs.validation.field_statuses?.map((fs, i) => (
+                                  <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <td className="py-1.5 px-3 font-semibold text-slate-800">{fs.field_name}</td>
+                                    <td className="py-1.5 px-3 text-slate-600">{fs.section}</td>
+                                    <td className="py-1.5 px-3 text-slate-500">{fs.source}</td>
+                                    <td className="py-1.5 px-3 text-right">
+                                      {fs.status === "completed" && (
+                                        <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
+                                          <CompletedIcon sx={{ fontSize: 13 }} /> Completed
+                                        </span>
+                                      )}
+                                      {fs.status === "missing_input" && (
+                                        <span className="inline-flex items-center gap-1 font-bold text-amber-700">
+                                          <MissingIcon sx={{ fontSize: 13 }} /> Missing
+                                        </span>
+                                      )}
+                                      {fs.status === "source_conflict" && (
+                                        <span className="inline-flex items-center gap-1 font-bold text-red-700">
+                                          <ConflictIcon sx={{ fontSize: 13 }} /> Conflict
+                                        </span>
+                                      )}
+                                      {fs.status === "requires_verification" && (
+                                        <span className="inline-flex items-center gap-1 font-semibold text-slate-500">
+                                          Manual Review
+                                        </span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </SectionCard>
+
+                  {/* 6. Generate Final Output */}
+                  <SectionCard step={6} title="Generate Final Output">
                     {status && status.quarters.length === 0 ? (
                       <p className="mt-3 text-sm font-semibold text-slate-500">
                         Load a quarter-end trial balance (Mar, Jun, Sep or Dec) to choose a quarter.
@@ -842,6 +1241,26 @@ export default function FinancialAnalysis() {
                     )}
 
                     <div>
+                      {/* Enrichment active indicator */}
+                      <div className="mt-3">
+                        {remainingInputs?.uploads?.mobitel_writeup && remainingInputs?.uploads?.group_pl ? (
+                          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
+                            <CompletedIcon fontSize="small" sx={{ color: "#059669" }} />
+                            <span>Fully Enriched: Mobitel narrative commentary and Group P&L figures will be integrated into the final document.</span>
+                          </div>
+                        ) : remainingInputs?.uploads?.mobitel_writeup || remainingInputs?.uploads?.group_pl ? (
+                          <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                            <WarningIcon fontSize="small" sx={{ color: "#d97706" }} />
+                            <span>Partially Enriched: {remainingInputs?.uploads?.mobitel_writeup ? "Mobitel commentary loaded" : "Group P&L loaded"}. The other section will contain template placeholders.</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                            <EnrichIcon fontSize="small" sx={{ color: "#64748b" }} />
+                            <span>Standard Trial Balance mode: Mobitel and Group tables will display template placeholders until remaining inputs are provided above.</span>
+                          </div>
+                        )}
+                      </div>
+
                       <Button
                         onClick={handleGenerate}
                         disabled={!canGenerate}
@@ -849,7 +1268,7 @@ export default function FinancialAnalysis() {
                         startIcon={<FinancialAnalysisIcon />}
                         sx={{ ...BUTTON_SX, mt: 3, px: 4, height: 46 }}
                       >
-                        {generating ? "Generating…" : "Generate Report"}
+                        {generating ? "Generating Final Output…" : "Generate Final Output"}
                       </Button>
                     </div>
                     {generating && <LinearProgress sx={{ mt: 2, borderRadius: 1 }} />}

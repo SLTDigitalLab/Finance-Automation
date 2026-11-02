@@ -37,6 +37,9 @@ from services.financial_analysis import commentary
 from services.financial_analysis.commentary import money, percent
 from services.financial_analysis.pl_engine import Comparison, FinancialAnalysis, MonthFigures, BudgetFigures
 from services.financial_analysis.periods import Period, Quarter
+from services.financial_analysis.group_pl_reader import GroupPLData
+from services.financial_analysis.mobitel_writeup_reader import MobitelWriteup
+from services.financial_analysis.remaining_inputs_populator import populate_remaining_inputs
 from utils.logger import logger
 
 TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "financial_analysis_templates" / "financial_analysis_template.docx"
@@ -872,7 +875,13 @@ class _Builder:
 # Main Report Generator
 
 
-def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path = TEMPLATE_PATH) -> Path:
+def generate_report(
+    inputs: ReportInputs,
+    output_dir: Path,
+    template_path: Path = TEMPLATE_PATH,
+    mobitel_writeup: Optional[MobitelWriteup] = None,
+    group_pl_data: Optional[GroupPLData] = None,
+) -> Path:
     analysis = inputs.analysis
     q = analysis.quarter
     specs = _section_specs(q)
@@ -983,6 +992,12 @@ def generate_report(inputs: ReportInputs, output_dir: Path, template_path: Path 
     # Update Section D commentary if budget is loaded
     if budget and budget.quarter_opex is not None:
         _update_section_d_commentary(doc, q, yoy, budget)
+
+    # Populate remaining inputs (Group P&L and Mobitel Write-up) if provided
+    remaining_warnings = populate_remaining_inputs(doc, mobitel_writeup, group_pl_data, q)
+    if remaining_warnings:
+        for w in remaining_warnings:
+            logger.warning(f"Remaining inputs: {w}")
 
     # Update section headings
     _update_section_headings(doc, q, specs)

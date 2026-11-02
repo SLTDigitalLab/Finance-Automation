@@ -892,3 +892,46 @@ export async function deleteFABudget(year, month) {
   return safeJsonResponse(response, "Failed to remove the budget workbook");
 }
 
+// ---------------------------------------------------------------------------
+// Remaining Financial Inputs (Mobitel Management Write-up & Group P&L)
+// ---------------------------------------------------------------------------
+
+export async function uploadMobitelWriteup(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/financial-analysis/remaining-inputs/upload/mobitel-writeup`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to upload Mobitel Write-up");
+}
+
+export async function uploadGroupPL(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/financial-analysis/remaining-inputs/upload/group-pl`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to upload Group Financial P&L");
+}
+
+export async function getRemainingInputsStatus() {
+  const response = await fetch(`${API_BASE}/financial-analysis/remaining-inputs/status`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to load remaining financial inputs status");
+}
+
+export async function deleteRemainingInput(fileType) {
+  const response = await fetch(`${API_BASE}/financial-analysis/remaining-inputs/${encodeURIComponent(fileType)}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to remove remaining input file");
+}
+
