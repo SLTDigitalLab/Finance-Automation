@@ -75,6 +75,7 @@ const NAV_ITEMS = [
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis", active: true },
+  { label: "CIP Reconciliation", icon: BudgetIcon, path: "/cip-reconciliation" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

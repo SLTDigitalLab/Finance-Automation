@@ -47,6 +47,7 @@ import {
   AccountBalanceWallet as PLIcon,
   TableChart as TableIcon,
   InfoOutlined as InfoIcon,
+  AccountBalance as CIPAccountIcon,
 } from "@mui/icons-material";
 import {
   uploadFiles,
@@ -95,6 +96,7 @@ const NAV_ITEMS = [
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
+  { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

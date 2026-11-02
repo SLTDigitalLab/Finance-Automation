@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import {
+   useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
   ThemeProvider,
@@ -27,6 +28,7 @@ import {
   Assessment as FinancialAnalysisIcon,
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
+  AccountBalance as CIPAccountIcon,
 } from "@mui/icons-material";
 import { generateBoardPack, downloadBoardPack } from "../services/api";
 import { visibleNavItems } from "../config/useCases";
@@ -49,6 +51,7 @@ const NAV_ITEMS = [
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack", active: true },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
+  { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

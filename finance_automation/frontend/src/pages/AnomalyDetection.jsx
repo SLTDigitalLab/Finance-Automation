@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import {
+   useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
   getAnomalySummary,
@@ -65,6 +66,7 @@ import {
   Tune as TuneIcon,
   Assessment as AssessmentIcon,
   ArrowForward as ArrowForwardIcon,
+  AccountBalance as CIPAccountIcon,
 } from "@mui/icons-material";
 
 // ── SLT-MOBITEL Corporate Theme ──────────────────────────────────────────────
@@ -85,6 +87,7 @@ const NAV_ITEMS = [
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies", active: true },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
+  { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

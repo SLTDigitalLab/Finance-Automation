@@ -16,6 +16,7 @@ import RevenueForecasting from "./pages/RevenueForecasting";
 import AnomalyDetection from "./pages/AnomalyDetection";
 import FinanceBoardPack from "./pages/FinanceBoardPack";
 import FinancialAnalysis from "./pages/FinancialAnalysis";
+import CIPReconciliation from "./pages/CIPReconciliation";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -132,6 +133,17 @@ export default function App() {
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <UseCaseRoute useCase="financial_analysis">
                   <FinancialAnalysis />
+                </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/cip-reconciliation"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseRoute useCase="use_case_4">
+                  <CIPReconciliation />
                 </UseCaseRoute>
               </ProtectedRoute>
             }

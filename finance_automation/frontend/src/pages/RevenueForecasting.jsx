@@ -53,6 +53,7 @@ import {
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
   Assessment as FinancialAnalysisIcon,
+  AccountBalance as CIPAccountIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -74,6 +75,7 @@ const NAV_ITEMS = [
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
+  { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

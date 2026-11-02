@@ -935,3 +935,84 @@ export async function deleteRemainingInput(fileType) {
   return safeJsonResponse(response, "Failed to remove remaining input file");
 }
 
+
+// ============================================================================
+// Use Case 4: CIP Reconciliation Report API
+// ============================================================================
+
+export async function getCipStatus(period = "Jul-26") {
+  const response = await fetch(`${API_BASE}/cip/status?period=${encodeURIComponent(period)}`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to load CIP reconciliation status");
+}
+
+export async function uploadCipFile(category, file, period = "Jul-26") {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    `${API_BASE}/cip/upload/${encodeURIComponent(category)}?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: formData,
+    }
+  );
+  return safeJsonResponse(response, `Failed to upload ${category} file`);
+}
+
+export async function deleteCipFile(category, period = "Jul-26") {
+  const response = await fetch(
+    `${API_BASE}/cip/file/${encodeURIComponent(category)}?period=${encodeURIComponent(period)}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, `Failed to delete ${category} file`);
+}
+
+export async function loadCipSampleData(period = "Jul-26") {
+  const response = await fetch(`${API_BASE}/cip/load-sample?period=${encodeURIComponent(period)}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to load CIP sample dataset");
+}
+
+export async function runCipReconciliation(period = "Jul-26") {
+  const response = await fetch(`${API_BASE}/cip/reconcile?period=${encodeURIComponent(period)}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to execute CIP reconciliation");
+}
+
+export async function generateCipReport(period = "Jul-26") {
+  const response = await fetch(`${API_BASE}/cip/generate-report?period=${encodeURIComponent(period)}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to generate CIP reconciliation report");
+}
+
+export async function downloadCipReport(filename = null, period = "Jul-26") {
+  const query = filename ? `filename=${encodeURIComponent(filename)}` : `period=${encodeURIComponent(period)}`;
+  const response = await fetch(`${API_BASE}/cip/download?${query}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await readApiError(response, "Failed to download CIP report");
+    throw new Error(errorText);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = filename || `CIP_Reconciliation_Report_${period}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
