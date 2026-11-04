@@ -1,44 +1,46 @@
-name: Deploy Finance Automation to VM
+name: Deploy to Production
 
 on:
   push:
     branches:
-      - main
+      - main              # Change to your working branch name (e.g., Kushan-dev) if needed
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4.2.2
-
-      - name: Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
+          script_stop: true
           script: |
-            echo "--- Navigating to project folder ---"
+            echo "--- Navigating to project directory ---"
             cd /home/deployer/finance-app
 
-            echo "--- Pulling latest changes from main ---"
-            git pull origin main
+            echo "--- Resetting local git modifications ---"
+            git checkout -- .
+            
+            echo "--- Pulling latest code ---"
+            git pull origin ${{ github.ref_name }}
 
-            echo "--- Rebuilding Frontend ---"
+            echo "--- Building Frontend ---"
             cd /home/deployer/finance-app/finance_automation/frontend
+            rm -rf build
             npm install
             npm run build
 
             echo "--- Updating Backend Dependencies ---"
             cd /home/deployer/finance-app/finance_automation/backend
-            source /home/deployer/finance-app/finance_automation/backend/.venv/bin/activate || true
+            source /home/deployer/finance-app/finance_automation/venv/bin/activate
             pip install -r requirements.txt
 
-            echo "--- Reloading Services ---"
+            echo "--- Restarting Services ---"
+            sudo systemctl restart finance-backend
             sudo systemctl reload nginx
-            sudo systemctl restart finance-backend || true
 
-            echo "--- Deployment Complete! ---"
+            echo "--- Deployment Complete ---"
