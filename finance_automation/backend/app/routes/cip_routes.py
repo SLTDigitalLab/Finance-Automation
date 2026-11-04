@@ -79,6 +79,12 @@ async def upload_cip_file(
             detail=f"Invalid file extension '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
+    if category == "opening_balances" and ext not in {".xlsx", ".xlsm"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Opening balance reports must use the .xlsx or .xlsm format.",
+        )
+
     content = await file.read()
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     if len(content) > max_bytes:
@@ -363,4 +369,3 @@ async def download_cip_report(
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-

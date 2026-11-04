@@ -125,8 +125,18 @@ function SectionCard({ step, title, subtitle, children }) {
   );
 }
 
-// 4 Official Input Categories (Opening Balances removed from UI)
+// Required source files and the optional prior-period opening-balance report.
 const CATEGORY_CONFIG = {
+  opening_balances: {
+    categoryKey: "opening_balances",
+    title: "Prior Period CIP Report (Optional)",
+    subtitle: "Prior-period closing balances (.xlsx, .xlsm)",
+    description: "Upload the prior-period CIP report to carry forward opening balances and include its projects in this reconciliation.",
+    iconColor: "#64748B",
+    iconBg: "bg-slate-100 text-slate-700",
+    accept: ".xlsx,.xlsm",
+    required: false,
+  },
   journal_details: {
     categoryKey: "journal_details",
     title: "Journal Details",
@@ -184,6 +194,7 @@ export default function CIPReconciliation() {
 
   // File input refs
   const fileInputRefs = {
+    opening_balances: useRef(null),
     journal_details: useRef(null),
     project_codes: useRef(null),
     interfaced_cip: useRef(null),
@@ -292,7 +303,7 @@ export default function CIPReconciliation() {
     );
   }, [reconResult, searchQuery]);
 
-  // Check if all 4 required files are uploaded
+  // Check if all required files are uploaded; opening balances are optional.
   const allRequiredUploaded = useMemo(() => {
     if (!statusData?.categories) return false;
     const req = ["journal_details", "project_codes", "interfaced_cip", "subledger_detail"];
@@ -417,11 +428,11 @@ export default function CIPReconciliation() {
                 </Alert>
               )}
 
-              {/* Section 1: Financial Input Files (4 Categories Only) */}
+              {/* Section 1: Financial Input Files */}
               <SectionCard
                 step={1}
                 title="Financial Input Files"
-                subtitle="Upload the 4 required source categories covering accounts 111401 to 111406."
+                subtitle="Upload the 4 required source categories. Add the prior-period CIP report to carry forward opening balances and its project list."
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   {Object.entries(CATEGORY_CONFIG).map(([catKey, config]) => {
@@ -480,6 +491,13 @@ export default function CIPReconciliation() {
                               size="small"
                               label="Enriched"
                               sx={{ fontWeight: 800, backgroundColor: "#d1fae5", color: "#065f46" }}
+                            />
+                          )}
+                          {!isUploaded && config.required === false && (
+                            <Chip
+                              size="small"
+                              label="Optional"
+                              sx={{ fontWeight: 800, backgroundColor: "#e2e8f0", color: "#334155" }}
                             />
                           )}
                         </div>
@@ -643,36 +661,36 @@ export default function CIPReconciliation() {
                                 {ar.account}
                               </TableCell>
                               <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.subledger_additions)}</TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.gl_dr)}</TableCell>
+                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.gl_additions_dr)}</TableCell>
                               <TableCell
                                 align="right"
                                 sx={{
                                   fontSize: "0.8rem",
                                   fontWeight: 700,
-                                  color: Math.abs(ar.diff_additions) < 0.01 ? "#059669" : "#dc2626",
+                                  color: Math.abs(ar.additions_variance) < 0.01 ? "#059669" : "#dc2626",
                                   tabularNums: true,
                                 }}
                               >
-                                {formatLKR(ar.diff_additions)}
+                                {formatLKR(ar.additions_variance)}
                               </TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.interfaced_cip)}</TableCell>
-                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.gl_cr)}</TableCell>
+                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.interfaced_cip_total)}</TableCell>
+                              <TableCell align="right" sx={{ fontSize: "0.8rem", tabularNums: true }}>{formatLKR(ar.gl_interface_cr)}</TableCell>
                               <TableCell
                                 align="right"
                                 sx={{
                                   fontSize: "0.8rem",
                                   fontWeight: 700,
-                                  color: Math.abs(ar.diff_interface) < 0.01 ? "#059669" : "#dc2626",
+                                  color: Math.abs(ar.interface_variance) < 0.01 ? "#059669" : "#dc2626",
                                   tabularNums: true,
                                 }}
                               >
-                                {formatLKR(ar.diff_interface)}
+                                {formatLKR(ar.interface_variance)}
                               </TableCell>
                               <TableCell align="center">
                                 <Chip
                                   size="small"
-                                  label={ar.reconciled ? "Matched" : "Variance"}
-                                  color={ar.reconciled ? "success" : "warning"}
+                                  label={ar.status === "Reconciled" ? "Matched" : "Variance"}
+                                  color={ar.status === "Reconciled" ? "success" : "warning"}
                                   sx={{ fontWeight: 700, fontSize: "0.7rem", height: 22 }}
                                 />
                               </TableCell>
