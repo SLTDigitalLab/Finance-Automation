@@ -44,6 +44,7 @@ import {
   Slideshow as BoardPackIcon,
   TableChart as TableIcon,
   WarningAmber as WarningIcon,
+  Receipt as AccrualReportIcon,
 } from "@mui/icons-material";
 import {
   deleteCipFile,
@@ -74,6 +75,7 @@ const NAV_ITEMS = [
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation", active: true },
+  { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

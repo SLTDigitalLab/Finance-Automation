@@ -5,6 +5,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  LinearProgress,
   Paper,
   TextField,
   Tooltip,
@@ -18,6 +19,9 @@ import {
   Delete as DeleteIcon,
   Download as DownloadIcon,
   Person as PersonIcon,
+  QueryStats as ForecastIcon,
+  Security as SecurityIcon,
+  PlayArrow as GenerateIcon,
   Receipt as ReceiptIcon,
   Refresh as RefreshIcon,
   Slideshow as BoardPackIcon,
@@ -31,7 +35,6 @@ import {
   downloadAccrualEntryReport,
   generateAccrualEntryReport,
   getAccrualEntryStatus,
-  loadAccrualEntrySample,
   uploadAccrualEntryFile,
 } from "../services/api";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
@@ -56,6 +59,8 @@ const INPUTS = [
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
+  { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: AssessmentIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: AccountBalanceIcon, path: "/cip-reconciliation" },
@@ -138,8 +143,10 @@ export default function AccrualEntryReport() {
   const [statusData, setStatusData] = useState(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [busyCategory, setBusyCategory] = useState(null);
-  const [loadingSample, setLoadingSample] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [generationStage, setGenerationStage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [reportSummary, setReportSummary] = useState(null);
@@ -166,6 +173,9 @@ export default function AccrualEntryReport() {
     try {
       await uploadAccrualEntryFile(category, file, period);
       setSuccessMessage(`${file.name} uploaded successfully.`);
+      setReportSummary(null);
+      setProgress(0);
+      setGenerationStage("");
       await refreshStatus();
     } catch (error) {
       setErrorMessage(error.message || "Unable to upload workbook.");
@@ -180,24 +190,12 @@ export default function AccrualEntryReport() {
     try {
       await deleteAccrualEntryFile(category, period);
       setSuccessMessage(`${label} workbook removed.`);
+      setReportSummary(null);
+      setProgress(0);
+      setGenerationStage("");
       await refreshStatus();
     } catch (error) {
       setErrorMessage(error.message || "Unable to remove workbook.");
-    }
-  };
-
-  const handleLoadSample = async () => {
-    setErrorMessage("");
-    setSuccessMessage("");
-    setLoadingSample(true);
-    try {
-      await loadAccrualEntrySample(period);
-      setSuccessMessage("Sample September input workbooks loaded.");
-      await refreshStatus();
-    } catch (error) {
-      setErrorMessage(error.message || "Unable to load sample workbooks.");
-    } finally {
-      setLoadingSample(false);
     }
   };
 
@@ -205,15 +203,56 @@ export default function AccrualEntryReport() {
     setErrorMessage("");
     setSuccessMessage("");
     setGenerating(true);
+    setProgress(15);
+    setGenerationStage("Reading uploaded source workbooks...");
+
+    const t1 = setTimeout(() => {
+      setProgress(40);
+      setGenerationStage("Matching payment schedules and natural accounts...");
+    }, 350);
+
+    const t2 = setTimeout(() => {
+      setProgress(70);
+      setGenerationStage("Carrying forward accruals and processing quarterly entries...");
+    }, 700);
+
+    const t3 = setTimeout(() => {
+      setProgress(90);
+      setGenerationStage("Compiling journal worksheets and verifying balances...");
+    }, 1100);
+
     try {
       const result = await generateAccrualEntryReport(period);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      setProgress(100);
+      setGenerationStage("Accrual entry report generated successfully!");
       setReportSummary(result);
-      await downloadAccrualEntryReport(result.filename, period);
-      setSuccessMessage("Accrual entry report generated and downloaded.");
+      setSuccessMessage(`Report generated: ${result.journal_entries} journal entries ready for download.`);
     } catch (error) {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      setProgress(0);
+      setGenerationStage("");
       setErrorMessage(error.message || "Unable to generate accrual entry report.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!reportSummary?.filename) return;
+    setErrorMessage("");
+    setDownloading(true);
+    try {
+      await downloadAccrualEntryReport(reportSummary.filename, period);
+      setSuccessMessage("Accrual entry report downloaded successfully.");
+    } catch (error) {
+      setErrorMessage(error.message || "Unable to download report.");
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -288,6 +327,8 @@ export default function AccrualEntryReport() {
                   onChange={(event) => {
                     setMonthValue(event.target.value);
                     setReportSummary(null);
+                    setProgress(0);
+                    setGenerationStage("");
                     setSuccessMessage("");
                   }}
                   InputLabelProps={{ shrink: true }}
@@ -323,17 +364,6 @@ export default function AccrualEntryReport() {
                     Upload all three Excel inputs for {period}. The reference output is not used as a source.
                   </p>
                 </div>
-                {period === "Sep-26" && (
-                  <Button
-                    onClick={handleLoadSample}
-                    disabled={loadingSample}
-                    variant="outlined"
-                    startIcon={loadingSample ? <CircularProgress size={16} /> : <UploadIcon />}
-                    sx={{ textTransform: "none", fontWeight: 800, borderRadius: 2 }}
-                  >
-                    Load September sample
-                  </Button>
-                )}
               </div>
             </Paper>
 
@@ -354,43 +384,112 @@ export default function AccrualEntryReport() {
               </div>
             )}
 
-            <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-black text-[#082f49]">Generate report</h2>
-                  <p className="mt-1 text-sm font-medium text-slate-500">
-                    The report carries forward eligible accruals and builds current-period entries from the uploaded data.
-                  </p>
-                  {reportSummary && (
-                    <p className="mt-2 text-sm font-bold text-slate-600">
-                      {reportSummary.journal_entries} journal entries · {reportSummary.carried_forward_entries} carried forward · {reportSummary.current_period_entries} current period
+            <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-black text-[#082f49]">Generate Report</h2>
+                    <p className="mt-1 text-sm font-medium text-slate-500">
+                      The report carries forward eligible accruals and builds current-period entries from the uploaded data.
                     </p>
-                  )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Separate Generate Button */}
+                    <Button
+                      onClick={handleGenerate}
+                      disabled={!allReady || generating || loadingStatus}
+                      variant="contained"
+                      startIcon={generating ? <CircularProgress size={18} color="inherit" /> : <GenerateIcon />}
+                      sx={{
+                        minWidth: 170,
+                        height: 46,
+                        px: 3,
+                        textTransform: "none",
+                        fontWeight: 800,
+                        borderRadius: 2,
+                        backgroundColor: "#0B3041",
+                        "&:hover": { backgroundColor: "#1B6B93" },
+                      }}
+                    >
+                      {generating ? "Generating..." : reportSummary ? "Re-generate Report" : "Generate Report"}
+                    </Button>
+
+                    {/* Separate Download Button - Appears once generated */}
+                    {reportSummary && (
+                      <Button
+                        onClick={handleDownload}
+                        disabled={downloading}
+                        variant="contained"
+                        startIcon={downloading ? <CircularProgress size={18} color="inherit" /> : <DownloadIcon />}
+                        sx={{
+                          minWidth: 180,
+                          height: 46,
+                          px: 3,
+                          textTransform: "none",
+                          fontWeight: 800,
+                          borderRadius: 2,
+                          backgroundColor: "#059669",
+                          "&:hover": { backgroundColor: "#047857" },
+                          boxShadow: "0 4px 14px rgba(5,150,105,0.3)",
+                        }}
+                      >
+                        {downloading ? "Downloading..." : "Download Report"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <Button
-                  onClick={handleGenerate}
-                  disabled={!allReady || generating || loadingStatus}
-                  variant="contained"
-                  startIcon={generating ? <CircularProgress size={18} color="inherit" /> : <DownloadIcon />}
-                  sx={{
-                    minWidth: 210,
-                    height: 46,
-                    px: 3,
-                    textTransform: "none",
-                    fontWeight: 900,
-                    borderRadius: 2,
-                    backgroundColor: "#0B3041",
-                    "&:hover": { backgroundColor: "#1B6B93" },
-                  }}
-                >
-                  {generating ? "Generating..." : "Generate & Download"}
-                </Button>
+
+                {/* Visual Progress Bar while generating or when completed */}
+                {(generating || reportSummary) && (
+                  <div className="mt-2 rounded-xl border border-slate-100 bg-[#f8fafc] p-4">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-600 mb-2">
+                      <span className="flex items-center gap-2">
+                        {generating ? (
+                          <CircularProgress size={14} thickness={5} sx={{ color: "#1B6B93" }} />
+                        ) : (
+                          <CheckCircleIcon sx={{ fontSize: 16, color: "#059669" }} />
+                        )}
+                        <span className="text-slate-700">{generationStage}</span>
+                      </span>
+                      <span className="font-extrabold text-[#0B3041]">{progress}%</span>
+                    </div>
+
+                    <LinearProgress
+                      variant="determinate"
+                      value={progress}
+                      sx={{
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: "#e2e8f0",
+                        "& .MuiLinearProgress-bar": {
+                          borderRadius: 4,
+                          backgroundColor: progress === 100 ? "#059669" : "#1B6B93",
+                          transition: "transform 0.4s ease",
+                        },
+                      }}
+                    />
+
+                    {reportSummary && (
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70">
+                        <p className="text-sm font-bold text-slate-700">
+                          {reportSummary.journal_entries} journal entries &middot; {reportSummary.carried_forward_entries} carried forward &middot; {reportSummary.current_period_entries} current period
+                        </p>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                          <CheckCircleIcon sx={{ fontSize: 15 }} />
+                          <span>{reportSummary.filename} generated</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!allReady && (
+                  <p className="mt-1 text-sm font-semibold text-amber-700">
+                    Upload the three required workbooks to enable report generation.
+                  </p>
+                )}
               </div>
-              {!allReady && (
-                <p className="mt-3 text-sm font-semibold text-amber-700">
-                  Upload the three required workbooks to enable report generation.
-                </p>
-              )}
             </Paper>
           </div>
         </main>

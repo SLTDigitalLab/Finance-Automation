@@ -67,6 +67,7 @@ import {
   Assessment as AssessmentIcon,
   ArrowForward as ArrowForwardIcon,
   AccountBalance as CIPAccountIcon,
+  Receipt as AccrualReportIcon,
 } from "@mui/icons-material";
 
 // ── SLT-MOBITEL Corporate Theme ──────────────────────────────────────────────
@@ -88,6 +89,7 @@ const NAV_ITEMS = [
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
+  { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

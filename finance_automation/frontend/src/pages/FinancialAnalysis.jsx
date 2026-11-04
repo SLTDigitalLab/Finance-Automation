@@ -39,6 +39,7 @@ import {
   AccountBalance as BudgetIcon,
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
+  Receipt as AccrualReportIcon,
 } from "@mui/icons-material";
 import {
   deleteFABudget,
@@ -76,6 +77,7 @@ const NAV_ITEMS = [
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis", active: true },
   { label: "CIP Reconciliation", icon: BudgetIcon, path: "/cip-reconciliation" },
+  { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

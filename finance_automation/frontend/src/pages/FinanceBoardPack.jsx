@@ -29,6 +29,7 @@ import {
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
   AccountBalance as CIPAccountIcon,
+  Receipt as AccrualReportIcon,
 } from "@mui/icons-material";
 import { generateBoardPack, downloadBoardPack } from "../services/api";
 import { visibleNavItems } from "../config/useCases";
@@ -52,6 +53,7 @@ const NAV_ITEMS = [
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack", active: true },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
+  { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 

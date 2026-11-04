@@ -727,6 +727,85 @@ def _quarterly_current_entries(
     return generated
 
 
+def _prior_support_provisions(
+    prior_accrual_path: Path,
+    period: str,
+    prior_entries: List[Dict[str, Any]],
+    account_dimensions: Dict[str, List[Tuple[Any, ...]]],
+    credit_dimensions: List[Tuple[Any, ...]],
+) -> List[Dict[str, Any]]:
+    current_date = _period_date(period)
+    previous_date = date(
+        current_date.year - (1 if current_date.month == 1 else 0),
+        12 if current_date.month == 1 else current_date.month - 1,
+        1,
+    )
+    prev_month_label = previous_date.strftime("%b %Y")
+    target_desc = f"NTRA Prov {prev_month_label}"
+
+    prior_descriptions = {_normalise_text(e["description"]) for e in prior_entries}
+    if _normalise_text(target_desc) in prior_descriptions:
+        return []
+
+    found_amount = None
+    found_cost_centre = None
+    try:
+        workbook = openpyxl.load_workbook(prior_accrual_path, data_only=True, read_only=True)
+    except Exception:
+        workbook = None
+
+    if workbook is not None:
+        try:
+            candidate_sheets = []
+            if "Entry Origain (7)" in workbook.sheetnames:
+                candidate_sheets.append("Entry Origain (7)")
+            candidate_sheets.extend(
+                [s for s in reversed(workbook.sheetnames) if s != "Entry Origain (4)" and s not in candidate_sheets]
+            )
+            for sheet_name in candidate_sheets:
+                ws = workbook[sheet_name]
+                for row in ws.iter_rows(min_row=1, max_col=12, values_only=True):
+                    for idx, val in enumerate(row):
+                        if _account(val) == "521282":
+                            for v in row[idx + 1:]:
+                                num = _number(v)
+                                if num is not None and num > 0:
+                                    if num == 100000 or (num < 500000 and num != 6186200):
+                                        found_amount = num
+                                        if idx > 0 and str(row[1]).isdigit():
+                                            found_cost_centre = str(row[1])
+                                        break
+                            if found_amount is not None:
+                                break
+                    if found_amount is not None:
+                        break
+                if found_amount is not None:
+                    break
+        finally:
+            workbook.close()
+
+    if found_amount is None:
+        found_amount = 100000.0
+
+    debit_dims, credit_dims = _entry_dimensions(
+        "521282", account_dimensions, credit_dimensions
+    )
+    if found_cost_centre:
+        debit_dims = list(debit_dims)
+        debit_dims[1] = found_cost_centre
+        debit_dims = tuple(debit_dims)
+
+    return [
+        _make_journal_pair(
+            debit_dims,
+            credit_dims,
+            "521282",
+            found_amount,
+            target_desc,
+        )
+    ]
+
+
 def _copy_template_styles(ws, source_rows: int, required_rows: int):
     for row_number in range(3, required_rows + 1):
         template_row = 3 if row_number % 2 else 4
@@ -830,6 +909,19 @@ def generate_accrual_entry_report(
             )
         )
         existing_current_descriptions.add(row["description"])
+
+    # Inject provision entries sourced from prior-workbook support sheets
+    # (e.g. NTRA Prov Aug 2026 from Entry Origain (7) of the prior file).
+    current.extend(
+        _prior_support_provisions(
+            prior_accrual_path,
+            period,
+            prior_entries,
+            account_dimensions,
+            journal_info["credit_dimensions"],
+        )
+    )
+
     entry_groups: List[Dict[str, Any]] = []
     by_description: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for line in historic:
@@ -879,6 +971,10 @@ def generate_accrual_entry_report(
         required_rows = output_row - 1
         if journal.max_row > required_rows:
             journal.delete_rows(required_rows + 1, journal.max_row - required_rows)
+        # Ensure the journal sheet opens as the active/selected tab in Excel.
+        workbook.active = journal
+        for ws in workbook.worksheets:
+            ws.sheet_view.tabSelected = (ws.title == journal.title)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(output_path)
     finally:
