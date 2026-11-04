@@ -1,3 +1,6 @@
+import io
+import zipfile
+import openpyxl
 """
 Writes the quarterly Financial Analysis Report (Word) in Finance's exact format.
 
@@ -197,6 +200,14 @@ _AFTER_COLOR = {qn(f"w:{tag}") for tag in (
 
 def _set_color(tc, color: Optional[str]):
     """Colours every run in the cell; None leaves the text in the default colour."""
+    for p in tc.findall(qn("w:p")):
+        p_pr = p.find(qn("w:pPr"))
+        if p_pr is not None:
+            p_rpr = p_pr.find(qn("w:rPr"))
+            if p_rpr is not None:
+                p_col = p_rpr.find(qn("w:color"))
+                if p_col is not None:
+                    p_rpr.remove(p_col)
     for r in tc.iter(qn("w:r")):
         r_pr = r.find(qn("w:rPr"))
         if r_pr is None:
@@ -236,6 +247,29 @@ def _size_like_cell(tc):
                 continue
             for run_size in p.findall(f"{qn('w:r')}/{qn('w:rPr')}/{size.tag}"):
                 run_size.set(qn("w:val"), size.get(qn("w:val")))
+
+def _mask_cell_with_xxxx(tc):
+    """If the cell contains numbers preserved from template, mask them with xxxx."""
+    text = _text(tc).strip()
+    if not text or text in ("N/A", "-"):
+        return
+    if not re.search(r"\d", text):
+        return
+    val = "xxxx%" if "%" in text else "xxxx"
+    _set_cell(tc, val)
+    _size_like_cell(tc)
+    _set_color(tc, None)
+
+
+def _mask_table_cells(tbl, start_row: int = 1, start_col: int = 1, end_col: Optional[int] = None):
+    """Mask numeric cells in a table starting from start_row and start_col."""
+    rows = tbl.findall(qn("w:tr"))
+    for tr in rows[start_row:]:
+        cells = _cells(tr)
+        max_col = end_col if end_col is not None else len(cells)
+        for tc in cells[start_col:max_col]:
+            _mask_cell_with_xxxx(tc)
+
 
 
 def _set_column_widths(tbl, widths: Sequence[int]):
@@ -335,6 +369,12 @@ def _update_group_table(tbl, comparison: Comparison, spec: SectionSpec, q: Quart
             continue
         cur_val, base_val = getter(cur), getter(base)
         diff, pct = _growth(cur_val, base_val)
+        # Mask Group columns (1..4) and Mobitel columns (11..14) since they are preserved from template
+        for tc in cells[1:5]:
+            _mask_cell_with_xxxx(tc)
+        for tc in cells[11:15]:
+            _mask_cell_with_xxxx(tc)
+        # Populate SLT PLC actuals (6..9)
         for tc, value in zip(cells[6:10], [money(cur_val), money(base_val), money(diff), percent(pct)]):
             _set_cell(tc, value)
             _size_like_cell(tc)
@@ -373,7 +413,7 @@ def _driver_rows(comparison: Comparison, line: str, cost: bool):
 
 
 def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period, budget: Optional[BudgetFigures] = None):
-    """Fills the P&L lines supported by the trial balance, keeping other rows intact."""
+    """Fills the P&L lines supported by the trial balance, masking template numbers with xxxx."""
     rows = tbl.findall(qn("w:tr"))
     head = _cells(rows[1])
     _set_cell(head[1], _long(end, "'"))
@@ -402,6 +442,8 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period,
             _set_cell(cells[2], money(base.lines[key]))
             _set_cell(cells[3], percent(pct))
             _set_color(cells[3], _favour_color(diff, cost=False))
+            for tc in cells[4:]:
+                _mask_cell_with_xxxx(tc)
         elif label in margins:
             key = margins[label]
             c, b = cur.margin(key), base.margin(key)
@@ -410,6 +452,8 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period,
             _set_cell(cells[2], percent(b))
             _set_cell(cells[3], percent(m_diff))
             _set_color(cells[3], _favour_color(m_diff, cost=False))
+            for tc in cells[4:]:
+                _mask_cell_with_xxxx(tc)
         elif label == "staffcosttorevenue" and budget and len(cells) >= 6:
             act_staff = budget.ytd_staff_actual
             ly_staff = budget.ytd_staff_ly_actual
@@ -421,18 +465,31 @@ def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period,
 
             if act_ratio is not None:
                 _set_cell(cells[1], percent(act_ratio))
+            else:
+                _mask_cell_with_xxxx(cells[1])
             if ly_ratio is not None:
                 _set_cell(cells[2], percent(ly_ratio))
+            else:
+                _mask_cell_with_xxxx(cells[2])
             if act_ratio is not None and ly_ratio is not None:
                 yoy_diff = act_ratio - ly_ratio
                 _set_cell(cells[3], percent(yoy_diff))
                 _set_color(cells[3], _favour_color(yoy_diff, cost=True))
+            else:
+                _mask_cell_with_xxxx(cells[3])
             if bud_ratio is not None:
                 _set_cell(cells[4], percent(bud_ratio))
+            else:
+                _mask_cell_with_xxxx(cells[4])
             if act_ratio is not None and bud_ratio is not None:
                 bud_diff = act_ratio - bud_ratio
                 _set_cell(cells[5], percent(bud_diff))
                 _set_color(cells[5], _favour_color(bud_diff, cost=True))
+            else:
+                _mask_cell_with_xxxx(cells[5])
+        else:
+            for tc in cells[1:]:
+                _mask_cell_with_xxxx(tc)
 
 
 def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period, budget: Optional[BudgetFigures] = None):
@@ -464,32 +521,58 @@ def _update_key_ratios(tbl, ytd: Comparison, end: Period, ly_end: Period, budget
         if values:
             for tc, value in zip(cells[1:], values):
                 _set_cell(tc, value)
-        if label == "revenuegrowthyoy":
-            _set_color(cells[1], _favour_color(growth, cost=False))
-
-        # Update budget and actual columns for expense ratios when budget figures are present
-        if budget and rev > 0 and len(cells) >= 4:
+            if label == "revenuegrowthyoy":
+                _set_color(cells[1], _favour_color(growth, cost=False))
+                for tc in cells[2:]:
+                    _mask_cell_with_xxxx(tc)
+            else:
+                for tc in cells[1 + len(values):]:
+                    _mask_cell_with_xxxx(tc)
+        elif budget and rev > 0 and len(cells) >= 4 and label in (
+            "directexpensestorevenue", "salesmarketingexpensestorevenue", "generaladministrationexpensestorevenue"
+        ):
             if label == "directexpensestorevenue":
                 if budget.ytd_direct_actual:
                     _set_cell(cells[1], percent(budget.ytd_direct_actual / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[1])
                 if budget.ytd_direct_ly_actual and base_rev > 0:
                     _set_cell(cells[2], percent(budget.ytd_direct_ly_actual / base_rev))
+                else:
+                    _mask_cell_with_xxxx(cells[2])
                 if budget.ytd_direct_expenses:
                     _set_cell(cells[3], percent(budget.ytd_direct_expenses / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[3])
             elif label == "salesmarketingexpensestorevenue":
                 if budget.ytd_sales_mktg_actual:
                     _set_cell(cells[1], percent(budget.ytd_sales_mktg_actual / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[1])
                 if budget.ytd_sales_mktg_ly_actual and base_rev > 0:
                     _set_cell(cells[2], percent(budget.ytd_sales_mktg_ly_actual / base_rev))
+                else:
+                    _mask_cell_with_xxxx(cells[2])
                 if budget.ytd_sales_mktg_expenses:
                     _set_cell(cells[3], percent(budget.ytd_sales_mktg_expenses / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[3])
             elif label == "generaladministrationexpensestorevenue":
                 if budget.ytd_ga_actual:
                     _set_cell(cells[1], percent(budget.ytd_ga_actual / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[1])
                 if budget.ytd_ga_ly_actual and base_rev > 0:
                     _set_cell(cells[2], percent(budget.ytd_ga_ly_actual / base_rev))
+                else:
+                    _mask_cell_with_xxxx(cells[2])
                 if budget.ytd_ga_costs:
                     _set_cell(cells[3], percent(budget.ytd_ga_costs / rev))
+                else:
+                    _mask_cell_with_xxxx(cells[3])
+        else:
+            for tc in cells[1:]:
+                _mask_cell_with_xxxx(tc)
 
 
 def _update_cover(body_elements, q: Quarter):
@@ -875,6 +958,86 @@ class _Builder:
 # Main Report Generator
 
 
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Native Chart Updating
+
+
+def _chart_month_label(p: Period) -> str:
+    """Format period as chart category label, e.g. Jun'26."""
+    from services.financial_analysis.periods import MONTH_NAMES
+    return f"{MONTH_NAMES[p.month - 1]}'{(p.year % 100):02d}"
+
+
+def _update_chart_xml(xml: str, cats: List[str], vals: List[int]) -> str:
+    """Updates the cached categories and values in a Word chart XML string."""
+    pt_count = len(cats)
+    cat_pts = "".join(f'<c:pt idx="{i}"><c:v>{c}</c:v></c:pt>' for i, c in enumerate(cats))
+    new_cat_cache = f'<c:strCache><c:ptCount val="{pt_count}"/>{cat_pts}</c:strCache>'
+    xml = re.sub(r'<c:strCache>.*?</c:strCache>', new_cat_cache, xml, count=1, flags=re.DOTALL)
+
+    val_pts = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(vals))
+    format_code = r'_(* #,##0_);_(* \(#,##0\);_(* "-"??_);_(@_)'
+    new_val_cache = f'<c:numCache><c:formatCode>{format_code}</c:formatCode><c:ptCount val="{pt_count}"/>{val_pts}</c:numCache>'
+    xml = re.sub(r'<c:numCache>.*?</c:numCache>', new_val_cache, xml, count=1, flags=re.DOTALL)
+    return xml
+
+
+def _update_embedded_excel(excel_bytes: bytes, cats: List[str], vals: List[int]) -> bytes:
+    """Updates columns AS..BE (45..57) in the chart embedded worksheet."""
+    wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+    ws = wb.active
+    # In chart4 and chart5, the 13 months map to columns 45 to 57 (AS to BE)
+    for idx, (cat, val) in enumerate(zip(cats, vals)):
+        col_idx = 45 + idx
+        ws.cell(row=1, column=col_idx, value=cat)
+        ws.cell(row=2, column=col_idx, value=val)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def _update_monthly_trend_charts(docx_path: Path, trend: List[MonthFigures]):
+    """
+    Updates the native Office line charts in Section A (Revenue Chart 4 and Opex Chart 5)
+    with the 13-month actual trend derived from uploaded Trial Balance inputs.
+    """
+    if not trend:
+        return
+
+    # Filter or take up to 13 months ending at current quarter
+    valid_trend = [m for m in trend if m.revenue is not None or m.opex is not None]
+    if not valid_trend:
+        valid_trend = trend[-13:] if len(trend) >= 13 else trend
+
+    months_labels = [_chart_month_label(m.period) for m in valid_trend]
+    rev_vals = [round(m.revenue) if m.revenue is not None else 0 for m in valid_trend]
+    opex_vals = [round(m.opex) if m.opex is not None else 0 for m in valid_trend]
+
+    with open(docx_path, "rb") as f:
+        docx_bytes = f.read()
+
+    in_mem = io.BytesIO(docx_bytes)
+    out_mem = io.BytesIO()
+
+    with zipfile.ZipFile(in_mem, "r") as zin, zipfile.ZipFile(out_mem, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/charts/chart4.xml":
+                data = _update_chart_xml(data.decode("utf-8"), months_labels, rev_vals).encode("utf-8")
+            elif item.filename == "word/charts/chart5.xml":
+                data = _update_chart_xml(data.decode("utf-8"), months_labels, opex_vals).encode("utf-8")
+            elif item.filename == "word/embeddings/Microsoft_Excel_Worksheet3.xlsx":
+                data = _update_embedded_excel(data, months_labels, rev_vals)
+            elif item.filename == "word/embeddings/Microsoft_Excel_Worksheet4.xlsx":
+                data = _update_embedded_excel(data, months_labels, opex_vals)
+            zout.writestr(item, data)
+
+    with open(docx_path, "wb") as f:
+        f.write(out_mem.getvalue())
+    logger.info("Section A Revenue and Opex 13-month trend charts updated with actual TB figures.")
+
 def generate_report(
     inputs: ReportInputs,
     output_dir: Path,
@@ -901,6 +1064,19 @@ def generate_report(
     _update_financial_summary(doc.tables[0]._element, ytd, q.end, q.same_quarter_last_year().end, budget)
     _update_key_ratios(doc.tables[1]._element, ytd, q.end, q.same_quarter_last_year().end, budget)
 
+    # Mask operational statistics preserved from template (Tables 2 & 3)
+    if len(doc.tables) > 2:
+        t2 = doc.tables[2]._element
+        t2_rows = t2.findall(qn("w:tr"))
+        if len(t2_rows) > 2:
+            t2_head = _cells(t2_rows[2])
+            if len(t2_head) >= 3:
+                _set_cell(t2_head[1], _long(q.end, "'"))
+                _set_cell(t2_head[2], _long(q.same_quarter_last_year().end, "'"))
+        _mask_table_cells(t2, start_row=3, start_col=1)
+    if len(doc.tables) > 3:
+        _mask_table_cells(doc.tables[3]._element, start_row=3, start_col=1)
+
     # 4. Update Section A (Current Quarter vs Same Quarter Last Year)
     _update_group_table(doc.tables[4]._element, yoy, specs[0], q)
     _fill_income_statement(doc.tables[5]._element, yoy, specs[0])
@@ -917,17 +1093,30 @@ def generate_report(
     _fill_income_statement(doc.tables[9]._element, ytd, specs[2])
     _update_section_commentary(doc, "C", ytd, specs[2])
 
-    # Update date headers in Section C tables (Cashflow, Borrowings, Interest)
+    # Update date headers in Section C tables (Cashflow, Borrowings, Interest) and mask template numbers
     if len(doc.tables) > 10:
         head_cf = _cells(doc.tables[10]._element.findall(qn("w:tr"))[0])
         if len(head_cf) >= 3:
             _set_cell(head_cf[1], f"YTD {_short(q.end)}")
             _set_cell(head_cf[2], f"YTD {_short(q.same_quarter_last_year().end)}")
+        _mask_table_cells(doc.tables[10]._element, start_row=2, start_col=1)
+
+    if len(doc.tables) > 11:
+        head_bw = _cells(doc.tables[11]._element.findall(qn("w:tr"))[0])
+        if len(head_bw) >= 3:
+            last_day = calendar.monthrange(q.end.year, q.end.month)[1]
+            ly_q_end = q.same_quarter_last_year().end
+            ly_last_day = calendar.monthrange(ly_q_end.year, ly_q_end.month)[1]
+            _set_cell(head_bw[1], f"As at {last_day:02d}.{q.end.month:02d}.{q.end.year}")
+            _set_cell(head_bw[2], f"As at {ly_last_day:02d}.{ly_q_end.month:02d}.{ly_q_end.year}")
+        _mask_table_cells(doc.tables[11]._element, start_row=1, start_col=1)
+
     if len(doc.tables) > 12:
         head_int = _cells(doc.tables[12]._element.findall(qn("w:tr"))[0])
         if len(head_int) >= 3:
             _set_header(head_int[1], f"YTD {_short(q.end)}", "(LKR Mn)")
             _set_header(head_int[2], f"YTD {_short(q.same_quarter_last_year().end)}", "(LKR Mn)")
+        _mask_table_cells(doc.tables[12]._element, start_row=2, start_col=1)
 
     # 7. Update Section D (Actuals vs Budget)
     if len(doc.tables) > 13:
@@ -954,15 +1143,9 @@ def generate_report(
                 col = _favour_color(diff, cost=True)
                 _set_color(cells[3], col)
                 _set_color(cells[4], col)
-            elif label != "opex":
-                if _text(cells[2]).strip() in ("xx,xxx", "xxxx", "x,xxx", "-"):
-                    _set_cell(cells[2], "-")
-                if _text(cells[3]).strip() in ("xxx", "( xxx )", "(xxx)", "-"):
-                    _set_cell(cells[3], "-")
-                    _set_color(cells[3], None)
-                if "x" in _text(cells[4]).lower() or _text(cells[4]).strip() == "-":
-                    _set_cell(cells[4], "-")
-                    _set_color(cells[4], None)
+            else:
+                for tc in cells[2:]:
+                    _mask_cell_with_xxxx(tc)
 
         if budget and budget.quarter_direct_budget is not None:
             expense_rows = [
@@ -992,6 +1175,14 @@ def generate_report(
     # Update Section D commentary if budget is loaded
     if budget and budget.quarter_opex is not None:
         _update_section_d_commentary(doc, q, yoy, budget)
+
+    # Mask template numbers in Key Projects Info (Tables 14, 15) and Annexure (i) (Table 16)
+    if len(doc.tables) > 14:
+        _mask_table_cells(doc.tables[14]._element, start_row=3, start_col=1)
+    if len(doc.tables) > 15:
+        _mask_table_cells(doc.tables[15]._element, start_row=1, start_col=1)
+    if len(doc.tables) > 16:
+        _mask_table_cells(doc.tables[16]._element, start_row=2, start_col=1)
 
     # Populate remaining inputs (Group P&L and Mobitel Write-up) if provided
     remaining_warnings = populate_remaining_inputs(doc, mobitel_writeup, group_pl_data, q)
@@ -1047,5 +1238,12 @@ def generate_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"Financial_Analysis_Q{q.quarter}_{q.year}_{uuid.uuid4().hex[:8]}.docx"
     b.finish(path)
+
+    # Update Section A Revenue (Chart 4) and Opex (Chart 5) native charts with monthly trend
+    try:
+        _update_monthly_trend_charts(path, inputs.trend)
+    except Exception as e:
+        logger.warning(f"Could not update monthly trend charts: {e}")
+
     logger.info(f"Financial Analysis Report written: {path.name}")
     return path
