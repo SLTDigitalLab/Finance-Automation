@@ -17,6 +17,7 @@ import AnomalyDetection from "./pages/AnomalyDetection";
 import FinanceBoardPack from "./pages/FinanceBoardPack";
 import FinancialAnalysis from "./pages/FinancialAnalysis";
 import CIPReconciliation from "./pages/CIPReconciliation";
+import AccrualEntryReport from "./pages/AccrualEntryReport";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -144,6 +145,17 @@ export default function App() {
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <UseCaseRoute useCase="use_case_4">
                   <CIPReconciliation />
+                </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/accrual-entry-report"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseRoute useCase="use_case_5">
+                  <AccrualEntryReport />
                 </UseCaseRoute>
               </ProtectedRoute>
             }

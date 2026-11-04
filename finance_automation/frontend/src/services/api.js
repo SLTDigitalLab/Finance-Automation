@@ -1016,3 +1016,81 @@ export async function downloadCipReport(filename = null, period = "Jul-26") {
   a.remove();
   window.URL.revokeObjectURL(downloadUrl);
 }
+
+// ============================================================================
+// Use Case 5: Accrual Entry Report API
+// ============================================================================
+
+export async function getAccrualEntryStatus(period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/status?period=${encodeURIComponent(period)}`,
+    { headers: getAuthHeaders() }
+  );
+  return safeJsonResponse(response, "Failed to load accrual entry status");
+}
+
+export async function uploadAccrualEntryFile(category, file, period = "Sep-26") {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/upload/${encodeURIComponent(category)}?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: formData,
+    }
+  );
+  return safeJsonResponse(response, `Failed to upload ${category} workbook`);
+}
+
+export async function deleteAccrualEntryFile(category, period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/file/${encodeURIComponent(category)}?period=${encodeURIComponent(period)}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, `Failed to remove ${category} workbook`);
+}
+
+export async function loadAccrualEntrySample(period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/load-sample?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, "Failed to load accrual entry sample workbooks");
+}
+
+export async function generateAccrualEntryReport(period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/generate?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, "Failed to generate accrual entry report");
+}
+
+export async function downloadAccrualEntryReport(filename, period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/download?filename=${encodeURIComponent(filename)}&period=${encodeURIComponent(period)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to download accrual entry report"));
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
