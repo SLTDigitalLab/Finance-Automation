@@ -64,6 +64,46 @@ def _set_text_in_para(p, text: str):
     keep.append(t_el)
 
 
+
+FAVOURABLE, UNFAVOURABLE = "00B050", "EE0000"
+
+_AFTER_COLOR = {qn(f"w:{tag}") for tag in (
+    "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect", "bdr", "shd", "fitText",
+    "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout", "specVanish", "oMath")}
+
+
+def _set_color(tc, color: Optional[str]):
+    """Colours every run in the cell; None leaves the text in the default colour."""
+    for p in tc.findall(qn("w:p")):
+        p_pr = p.find(qn("w:pPr"))
+        if p_pr is not None:
+            p_rpr = p_pr.find(qn("w:rPr"))
+            if p_rpr is not None:
+                p_col = p_rpr.find(qn("w:color"))
+                if p_col is not None:
+                    p_rpr.remove(p_col)
+    for r in tc.iter(qn("w:r")):
+        r_pr = r.find(qn("w:rPr"))
+        if r_pr is None:
+            r_pr = r.makeelement(qn("w:rPr"), {})
+            r.insert(0, r_pr)
+        existing = r_pr.find(qn("w:color"))
+        if existing is not None:
+            r_pr.remove(existing)
+        if color:
+            el = r_pr.makeelement(qn("w:color"), {qn("w:val"): color})
+            after = next((c for c in r_pr if c.tag in _AFTER_COLOR), None)
+            if after is not None:
+                after.addprevious(el)
+            else:
+                r_pr.append(el)
+
+
+def _favour_color(diff: Optional[float], cost: bool = False, min_abs: float = 1e-6) -> Optional[str]:
+    if diff is None or abs(diff) < min_abs:
+        return None
+    return FAVOURABLE if (diff < 0 if cost else diff > 0) else UNFAVOURABLE
+
 def _set_cell_text(tc, value: str):
     paras = tc.findall(qn("w:p"))
     if paras:
@@ -173,14 +213,17 @@ def _fill_table_for_entity(
         var_pct = (var_lkr / abs(pri_rnd)) if (var_lkr is not None and pri_rnd) else None
 
         n = len(cells)
+        col = _favour_color(var_lkr, cost=(label == "opex")) if var_lkr is not None else None
         if n > col_current and cur_rnd is not None:
             _set_cell_text(cells[col_current], _money(cur_rnd))
         if n > col_prior and pri_rnd is not None:
             _set_cell_text(cells[col_prior], _money(pri_rnd))
         if n > col_var_lkr and var_lkr is not None:
             _set_cell_text(cells[col_var_lkr], _money(var_lkr))
+            _set_color(cells[col_var_lkr], col)
         if n > col_var_pct and var_pct is not None:
             _set_cell_text(cells[col_var_pct], _pct(var_pct))
+            _set_color(cells[col_var_pct], col)
 
 
 def populate_group_tables(
