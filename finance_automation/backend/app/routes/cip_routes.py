@@ -53,7 +53,7 @@ async def get_cip_status(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     """Returns the upload and readiness status of files for the requested period."""
-    return get_status(period=period)
+    return get_status(period=period, user_id=current_user.id)
 
 
 @cip_router.post("/upload/{category}")
@@ -106,6 +106,7 @@ async def upload_cip_file(
             original_name=file.filename or f"{category}{ext}",
             period=period,
             uploaded_by=uploader,
+            user_id=current_user.id,
         )
 
         log_audit(
@@ -138,7 +139,7 @@ async def delete_cip_file(
     if category not in CATEGORIES:
         raise HTTPException(status_code=400, detail="Invalid category")
 
-    success = remove_file(category, period)
+    success = remove_file(category, period, user_id=current_user.id)
     if not success:
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -191,6 +192,7 @@ async def load_sample_dataset(
                 original_name=filename,
                 period=period,
                 uploaded_by=uploader,
+                user_id=current_user.id,
             )
             loaded.append(cat)
 
@@ -217,12 +219,12 @@ async def run_reconciliation(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     """Executes reconciliation logic and caches the results."""
-    # Find all file paths
-    pm_path = get_file_path("project_codes", period)
-    sub_path = get_file_path("subledger_detail", period)
-    int_path = get_file_path("interfaced_cip", period)
-    jd_path = get_file_path("journal_details", period)
-    open_path = get_file_path("opening_balances", period)
+    # Find all file paths for current user
+    pm_path = get_file_path("project_codes", period, user_id=current_user.id)
+    sub_path = get_file_path("subledger_detail", period, user_id=current_user.id)
+    int_path = get_file_path("interfaced_cip", period, user_id=current_user.id)
+    jd_path = get_file_path("journal_details", period, user_id=current_user.id)
+    open_path = get_file_path("opening_balances", period, user_id=current_user.id)
 
     missing = []
     if not pm_path:
@@ -257,7 +259,7 @@ async def run_reconciliation(
         )
 
         result = engine.run()
-        _RECON_CACHE[period] = result
+        _RECON_CACHE[f"{current_user.id}_{period}"] = result
 
         return {
             "status": "success",
@@ -293,14 +295,14 @@ async def generate_cip_report(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     """Generates the Excel CIP Reconciliation Report."""
-    recon_result = _RECON_CACHE.get(period)
+    recon_result = _RECON_CACHE.get(f"{current_user.id}_{period}")
     if not recon_result:
         # Run reconciliation automatically if not cached
-        pm_path = get_file_path("project_codes", period)
-        sub_path = get_file_path("subledger_detail", period)
-        int_path = get_file_path("interfaced_cip", period)
-        jd_path = get_file_path("journal_details", period)
-        open_path = get_file_path("opening_balances", period)
+        pm_path = get_file_path("project_codes", period, user_id=current_user.id)
+        sub_path = get_file_path("subledger_detail", period, user_id=current_user.id)
+        int_path = get_file_path("interfaced_cip", period, user_id=current_user.id)
+        jd_path = get_file_path("journal_details", period, user_id=current_user.id)
+        open_path = get_file_path("opening_balances", period, user_id=current_user.id)
 
         if not (pm_path and sub_path and int_path and jd_path):
             raise HTTPException(status_code=400, detail="Missing required files to generate report")
@@ -320,11 +322,13 @@ async def generate_cip_report(
             period=period,
         )
         recon_result = engine.run()
-        _RECON_CACHE[period] = recon_result
+        _RECON_CACHE[f"{current_user.id}_{period}"] = recon_result
 
     clean_p = period.replace(" ", "_").replace("-", "_")
     filename = f"CIP_Reconciliation_Report_{clean_p}.xlsx"
-    out_file = OUTPUT_DIR / filename
+    user_out_dir = OUTPUT_DIR / str(current_user.id)
+    user_out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = user_out_dir / filename
 
     generator = CIPReportGenerator(recon_result)
     generator.generate(out_file)
@@ -357,7 +361,7 @@ async def download_cip_report(
         clean_p = period.replace(" ", "_").replace("-", "_")
         filename = f"CIP_Reconciliation_Report_{clean_p}.xlsx"
 
-    target = OUTPUT_DIR / filename
+    target = (OUTPUT_DIR / str(current_user.id)) / filename
     if not target.exists():
         raise HTTPException(
             status_code=404,

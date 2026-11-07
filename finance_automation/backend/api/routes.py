@@ -46,6 +46,7 @@ from services.ppt_generator import generate_pptx
 router = APIRouter(prefix="/api", tags=["finance"])
 
 uploaded_files_store: dict = {}
+_session_user_store: dict = {}
 report_jobs: dict = {}
 unmapped_jobs: dict = {}
 
@@ -197,17 +198,21 @@ def _persist_tb_data(
         raise
 
 
-def _db_save_job(session_id: str, status: str, result: dict | None = None):
+def _db_save_job(session_id: str, status: str, result: dict | None = None, user_id: int | None = None):
     """Upsert a report job row in the database (visible to all workers)."""
     db = SessionLocal()
     try:
         row = db.query(ReportJob).filter(ReportJob.session_id == session_id).first()
         if row:
             row.status = status
-            row.result_json = json.dumps(result) if result is not None else None
+            if result is not None:
+                row.result_json = json.dumps(result)
+            if user_id is not None:
+                row.user_id = user_id
         else:
             row = ReportJob(
                 session_id=session_id,
+                user_id=user_id,
                 status=status,
                 result_json=json.dumps(result) if result is not None else None,
             )
@@ -236,6 +241,23 @@ def _db_load_job(session_id: str) -> dict | None:
         db.close()
 
 
+def _check_session_owner(session_id: str, current_user: User, db: Session = None):
+    """Enforces that only the user who uploaded the files for this session can generate or view status."""
+    if current_user.role == "Admin":
+        return
+    clean_session = session_id.replace("unmapped_", "")
+    owner_id = _session_user_store.get(clean_session)
+    if owner_id is not None and owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied to this session.")
+    if owner_id is None and db is not None:
+        rec = db.query(UploadedFinanceFile).filter(UploadedFinanceFile.session_id == clean_session).first()
+        if rec and rec.user_id and rec.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this session.")
+        job = db.query(ReportJob).filter(ReportJob.session_id == session_id).first()
+        if job and job.user_id and job.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this session.")
+
+
 DEFAULT_FILES_DIR = settings.TEMPLATE_DIR / "defaults"
 DEFAULT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -258,7 +280,12 @@ def _default_file_info(file_type: str) -> dict:
 def _restore_session_files(session_id: str) -> dict | None:
     session_dir = settings.UPLOAD_DIR / session_id
     if not session_dir.exists() or not session_dir.is_dir():
-        return None
+        # Check user-scoped subdirectories
+        candidates = list(settings.UPLOAD_DIR.glob(f"*/{session_id}"))
+        if candidates and candidates[0].is_dir():
+            session_dir = candidates[0]
+        else:
+            return None
 
     file_paths = {}
     for label in ["tb_current", "tb_previous", "budget", "mapping"]:
@@ -409,11 +436,13 @@ def _build_report_for_session(
     revenue_results = calculate_revenue(cy_tb_data, py_tb_data, budget_proc)
 
     logger.info("Generating PowerPoint presentation...")
+    user_out_dir = settings.OUTPUT_DIR / str(user_id)
+    user_out_dir.mkdir(parents=True, exist_ok=True)
     ppt_path = generate_pptx(
         revenue_results,
         report_month,
         report_year,
-        str(settings.OUTPUT_DIR),
+        str(user_out_dir),
     )
 
     elapsed = round(time.time() - start_time, 2)
@@ -441,12 +470,13 @@ def _build_report_for_session(
     unmapped_month = float(-cy_tb_df[unmapped_mask]["period_activity"].sum() / divisor) if unmapped_mask.any() else 0.0
     unmapped_ytd = float(-cy_tb_df[unmapped_mask]["ending_balance"].sum() / divisor) if unmapped_mask.any() else 0.0
 
-    # Retrieve PL Revenue reference from database for this specific period (strictly matching period)
+    # Retrieve PL Revenue reference from database for this specific period (strictly matching period and user)
     pl_record = (
         db.query(PLRevenueRecord)
         .filter(
             PLRevenueRecord.period_month.ilike(f"%{report_month[:3]}%"),
             PLRevenueRecord.period_year == int(report_year),
+            PLRevenueRecord.user_id == user_id,
         )
         .order_by(PLRevenueRecord.id.desc())
         .first()
@@ -487,7 +517,7 @@ def _run_report_job(session_id: str, user_id: int, user_name: str):
         job_data = result.model_dump()
         report_jobs[session_id] = job_data
         # Persist to DB so other workers can read the full result
-        _db_save_job(session_id, "success", job_data)
+        _db_save_job(session_id, "success", job_data, user_id=user_id)
     except HTTPException as e:
         detail = e.detail
         if isinstance(detail, dict) and "errors" in detail:
@@ -497,7 +527,7 @@ def _run_report_job(session_id: str, user_id: int, user_name: str):
         logger.error(f"Report job failed for session {session_id}: {message}")
         error_data = {"status": "error", "message": message}
         report_jobs[session_id] = error_data
-        _db_save_job(session_id, "error", error_data)
+        _db_save_job(session_id, "error", error_data, user_id=user_id)
     except Exception as e:
         logger.exception(f"Report job failed for session {session_id}: {e}")
         error_data = {
@@ -505,7 +535,7 @@ def _run_report_job(session_id: str, user_id: int, user_name: str):
             "message": f"Report generation failed: {str(e)}",
         }
         report_jobs[session_id] = error_data
-        _db_save_job(session_id, "error", error_data)
+        _db_save_job(session_id, "error", error_data, user_id=user_id)
     finally:
         db.close()
 
@@ -523,7 +553,7 @@ async def upload_files(
     logger.info(f"User {current_user.email} is uploading files")
 
     session_id = str(uuid.uuid4())[:8]
-    session_dir = settings.UPLOAD_DIR / session_id
+    session_dir = settings.UPLOAD_DIR / str(current_user.id) / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
     file_paths = {}
@@ -598,6 +628,7 @@ async def upload_files(
         raise HTTPException(status_code=400, detail={"errors": map_val.errors})
 
     uploaded_files_store[session_id] = file_paths
+    _session_user_store[session_id] = current_user.id
 
     log_audit(
         db=db,
@@ -694,7 +725,7 @@ async def upload_pl_file(
             detail=f"Invalid file type for PL workbook: {ext}. Allowed: .xlsx, .xls",
         )
 
-    pl_dir = settings.UPLOAD_DIR / "pl"
+    pl_dir = settings.UPLOAD_DIR / str(current_user.id) / "pl"
     pl_dir.mkdir(parents=True, exist_ok=True)
 
     session_id = str(uuid.uuid4())[:8]
@@ -725,7 +756,7 @@ async def upload_pl_file(
     # Record in UploadedFinanceFile
     uploaded_file = (
         db.query(UploadedFinanceFile)
-        .filter(UploadedFinanceFile.file_hash == file_hash)
+        .filter(UploadedFinanceFile.file_hash == file_hash, UploadedFinanceFile.user_id == current_user.id)
         .first()
     )
     if uploaded_file is None:
@@ -750,6 +781,7 @@ async def upload_pl_file(
         .filter(
             PLRevenueRecord.period_month == pl_data["month"],
             PLRevenueRecord.period_year == pl_data["year"],
+            PLRevenueRecord.user_id == current_user.id,
         )
         .first()
     )
@@ -803,17 +835,21 @@ async def get_pl_revenue(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    query = db.query(PLRevenueRecord)
+    query = db.query(PLRevenueRecord).filter(PLRevenueRecord.user_id == current_user.id)
     if period_month:
         query = query.filter(PLRevenueRecord.period_month.ilike(f"%{period_month[:3]}%"))
     if period_year:
         query = query.filter(PLRevenueRecord.period_year == int(period_year))
 
-    if period_month or period_year:
-        record = query.order_by(PLRevenueRecord.id.desc()).first()
-    else:
-        # Default on initial dashboard load with no active report: return latest uploaded PL
-        record = db.query(PLRevenueRecord).order_by(PLRevenueRecord.id.desc()).first()
+    record = query.order_by(PLRevenueRecord.id.desc()).first()
+
+    if not record and current_user.role == "Admin":
+        admin_query = db.query(PLRevenueRecord)
+        if period_month:
+            admin_query = admin_query.filter(PLRevenueRecord.period_month.ilike(f"%{period_month[:3]}%"))
+        if period_year:
+            admin_query = admin_query.filter(PLRevenueRecord.period_year == int(period_year))
+        record = admin_query.order_by(PLRevenueRecord.id.desc()).first()
 
     if not record:
         return {
@@ -897,6 +933,7 @@ async def upload_default_file(
 async def generate_report(
     background_tasks: BackgroundTasks,
     session_id: str = "",
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     if not session_id:
@@ -904,16 +941,18 @@ async def generate_report(
             status_code=400, detail="Invalid or missing session_id. Upload files first."
         )
 
+    _check_session_owner(session_id, current_user, db)
     _validate_complete_session(session_id)
     existing_job = report_jobs.get(session_id)
     if existing_job:
         return existing_job
 
     # Mark as processing in DB (visible to other workers) and launch background task
-    _db_save_job(session_id, "processing")
+    _db_save_job(session_id, "processing", user_id=current_user.id)
     report_jobs[session_id] = {
         "status": "processing",
         "message": "Report generation started.",
+        "user_id": current_user.id,
     }
     background_tasks.add_task(
         _run_report_job,
@@ -928,8 +967,10 @@ async def generate_report(
 @router.get("/report-status/{session_id}")
 async def get_report_status(
     session_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
+    _check_session_owner(session_id, current_user, db)
     # 1. Check in-memory (same worker — fastest path)
     job = report_jobs.get(session_id)
     if job and job.get("status") in ("success", "error"):
@@ -958,9 +999,25 @@ async def download_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    file_path = settings.OUTPUT_DIR / filename
+    file_path = (settings.OUTPUT_DIR / str(current_user.id)) / filename
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Report file not found.")
+        if current_user.role == "Admin":
+            found = list(settings.OUTPUT_DIR.glob(f"*/{filename}"))
+            if found:
+                file_path = found[0]
+            elif (settings.OUTPUT_DIR / filename).exists():
+                file_path = settings.OUTPUT_DIR / filename
+            else:
+                raise HTTPException(status_code=404, detail="Report file not found.")
+        elif (settings.OUTPUT_DIR / filename).exists():
+            jobs = db.query(ReportJob).filter(ReportJob.user_id == current_user.id).all()
+            owned = any(filename in (j.result_json or "") for j in jobs)
+            if owned:
+                file_path = settings.OUTPUT_DIR / filename
+            else:
+                raise HTTPException(status_code=403, detail="Access denied to this report file.")
+        else:
+            raise HTTPException(status_code=404, detail="Report file not found.")
 
     log_audit(
         db=db,
@@ -1833,7 +1890,9 @@ def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
             raise ValueError("Unmapped data not available. Please generate the report first.")
 
         output_filename = f"Unmapped_Rows_{report_month}_{report_year}.xlsx"
-        output_path = settings.OUTPUT_DIR / output_filename
+        user_output_dir = settings.OUTPUT_DIR / str(user_id)
+        user_output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = user_output_dir / output_filename
 
         display_cols = [
             "gl_code", "description", "flexfield", "cost_center", "location",
@@ -1890,13 +1949,13 @@ def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
             "py_unmapped_count": py_count,
         }
         unmapped_jobs[session_id] = job_data
-        _db_save_job(f"unmapped_{session_id}", "success", job_data)
+        _db_save_job(f"unmapped_{session_id}", "success", job_data, user_id=user_id)
 
     except Exception as e:
         logger.exception(f"Unmapped job failed for session {session_id}: {e}")
         error_data = {"status": "error", "message": str(e)}
         unmapped_jobs[session_id] = error_data
-        _db_save_job(f"unmapped_{session_id}", "error", error_data)
+        _db_save_job(f"unmapped_{session_id}", "error", error_data, user_id=user_id)
     finally:
         db.close()
 
@@ -1905,6 +1964,7 @@ def _run_unmapped_job(session_id: str, user_id: int, user_name: str):
 async def generate_unmapped_report(
     background_tasks: BackgroundTasks,
     session_id: str = Query(""),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     if not session_id:
@@ -1912,6 +1972,8 @@ async def generate_unmapped_report(
             status_code=400,
             detail="Invalid or missing session_id. Generate report first.",
         )
+
+    _check_session_owner(session_id, current_user, db)
 
     # Return cached result if already done
     existing = unmapped_jobs.get(session_id)
@@ -1932,7 +1994,7 @@ async def generate_unmapped_report(
     if existing and existing.get("status") == "processing":
         return existing
 
-    _db_save_job(f"unmapped_{session_id}", "processing")
+    _db_save_job(f"unmapped_{session_id}", "processing", user_id=current_user.id)
     unmapped_jobs[session_id] = {"status": "processing", "message": "Unmapped report generation started."}
     background_tasks.add_task(_run_unmapped_job, session_id, current_user.id, current_user.full_name)
 
@@ -1942,8 +2004,11 @@ async def generate_unmapped_report(
 @router.get("/unmapped-status/{session_id}")
 async def get_unmapped_status(
     session_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
+    _check_session_owner(session_id, current_user, db)
+
     # Check in-memory first
     job = unmapped_jobs.get(session_id)
     if job and job.get("status") in ("success", "error"):
@@ -1969,9 +2034,25 @@ async def download_unmapped_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    file_path = settings.OUTPUT_DIR / filename
+    file_path = (settings.OUTPUT_DIR / str(current_user.id)) / filename
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Unmapped report file not found.")
+        if current_user.role == "Admin":
+            found = list(settings.OUTPUT_DIR.glob(f"*/{filename}"))
+            if found:
+                file_path = found[0]
+            elif (settings.OUTPUT_DIR / filename).exists():
+                file_path = settings.OUTPUT_DIR / filename
+            else:
+                raise HTTPException(status_code=404, detail="Unmapped report file not found.")
+        elif (settings.OUTPUT_DIR / filename).exists():
+            jobs = db.query(ReportJob).filter(ReportJob.user_id == current_user.id).all()
+            owned = any(filename in (j.result_json or "") for j in jobs)
+            if owned:
+                file_path = settings.OUTPUT_DIR / filename
+            else:
+                raise HTTPException(status_code=403, detail="Access denied to this report file.")
+        else:
+            raise HTTPException(status_code=404, detail="Unmapped report file not found.")
 
     log_audit(
         db=db,

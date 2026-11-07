@@ -56,38 +56,39 @@ def _period_folder(period: str) -> str:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _paths(period: str) -> Dict[str, Path]:
+def _paths(period: str, user_id: int) -> Dict[str, Path]:
     folder = _period_folder(period)
-    return {category: UPLOAD_DIR / folder / f"{category}.xlsx" for category in CATEGORIES}
+    return {category: UPLOAD_DIR / str(user_id) / folder / f"{category}.xlsx" for category in CATEGORIES}
 
 
-def _metadata_path(period: str) -> Path:
-    return UPLOAD_DIR / _period_folder(period) / "metadata.json"
+def _metadata_path(period: str, user_id: int) -> Path:
+    return UPLOAD_DIR / str(user_id) / _period_folder(period) / "metadata.json"
 
 
-def _read_metadata(period: str) -> dict:
-    path = _metadata_path(period)
+def _read_metadata(period: str, user_id: int) -> dict:
+    path = _metadata_path(period, user_id)
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.exception("Could not read accrual input metadata for %s", period)
+        logger.exception("Could not read accrual input metadata for user %s, %s", user_id, period)
         raise HTTPException(status_code=500, detail="Unable to read accrual input metadata.") from exc
 
 
-def _save_file(category: str, source: Path, period: str, original_name: str, uploaded_by: str) -> dict:
-    target = _paths(period)[category]
+def _save_file(category: str, source: Path, period: str, original_name: str, user_id: int, uploaded_by: str) -> dict:
+    target = _paths(period, user_id)[category]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(source.read_bytes())
-    metadata = _read_metadata(period)
+    metadata = _read_metadata(period, user_id)
     metadata[category] = {
         "filename": original_name,
         "file_size": target.stat().st_size,
         "uploaded_at": datetime.utcnow().isoformat(),
         "uploaded_by": uploaded_by,
+        "user_id": user_id,
     }
-    _metadata_path(period).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    _metadata_path(period, user_id).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata[category]
 
 
@@ -114,8 +115,8 @@ async def get_accrual_entry_status(
     period: str = Query("Sep-26"),
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
-    stored = _paths(period)
-    metadata = _read_metadata(period)
+    stored = _paths(period, current_user.id)
+    metadata = _read_metadata(period, current_user.id)
     categories = {}
     for category, label in CATEGORIES.items():
         info = metadata.get(category, {})
@@ -163,17 +164,18 @@ async def upload_accrual_input(
         raise HTTPException(status_code=400, detail="The uploaded file is not a readable Excel workbook.") from exc
 
     try:
-        path = _paths(period)[category]
+        path = _paths(period, current_user.id)[category]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
-        metadata = _read_metadata(period)
+        metadata = _read_metadata(period, current_user.id)
         metadata[category] = {
             "filename": filename,
             "file_size": len(content),
             "uploaded_at": datetime.utcnow().isoformat(),
             "uploaded_by": current_user.full_name or current_user.email or "Unknown",
+            "user_id": current_user.id,
         }
-        _metadata_path(period).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _metadata_path(period, current_user.id).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     except HTTPException:
         raise
     except OSError as exc:
@@ -194,13 +196,13 @@ async def delete_accrual_input(
 ):
     if category not in CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category '{category}'.")
-    path = _paths(period)[category]
+    path = _paths(period, current_user.id)[category]
     if not path.exists():
         raise HTTPException(status_code=404, detail="Input file not found.")
     path.unlink()
-    metadata = _read_metadata(period)
+    metadata = _read_metadata(period, current_user.id)
     metadata.pop(category, None)
-    _metadata_path(period).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    _metadata_path(period, current_user.id).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     _audit(db, request, current_user, "ACCRUAL_INPUT_DELETED", f"Removed {category} input for {period}.")
     return {"status": "success", "message": f"Removed {CATEGORIES[category]} for {period}."}
 
@@ -223,7 +225,7 @@ async def load_accrual_sample(
             status_code=404,
             detail=f"Sample input workbook(s) not found: {', '.join(missing)}",
         )
-    metadata = _read_metadata(period)
+    metadata = _read_metadata(period, current_user.id)
     try:
         for category, filename in SAMPLE_FILES.items():
             path = SAMPLE_DIR / filename
@@ -232,6 +234,7 @@ async def load_accrual_sample(
                 path,
                 period,
                 filename,
+                current_user.id,
                 current_user.full_name or current_user.email or "Unknown",
             )
     except OSError as exc:
@@ -249,7 +252,7 @@ async def generate_accrual_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
-    paths = _paths(period)
+    paths = _paths(period, current_user.id)
     missing = [CATEGORIES[category] for category, path in paths.items() if not path.is_file()]
     if missing:
         raise HTTPException(
@@ -257,7 +260,8 @@ async def generate_accrual_report(
             detail=f"Upload all required workbooks before generating the report: {', '.join(missing)}.",
         )
     filename = f"Accrual_Entry_Report_{_period_folder(period)}.xlsx"
-    output_path = OUTPUT_DIR / _period_folder(period) / filename
+    output_path = OUTPUT_DIR / str(current_user.id) / _period_folder(period) / filename
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         result = generate_accrual_entry_report(
             payment_path=paths["payment_details"],
@@ -293,7 +297,7 @@ async def download_accrual_report(
     expected = f"Accrual_Entry_Report_{_period_folder(period)}.xlsx"
     if filename != expected:
         raise HTTPException(status_code=400, detail="Report filename does not match the selected period.")
-    path = OUTPUT_DIR / _period_folder(period) / filename
+    path = OUTPUT_DIR / str(current_user.id) / _period_folder(period) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Report not found. Generate it before downloading.")
     return FileResponse(path, filename=filename, media_type=EXCEL_MEDIA_TYPE)

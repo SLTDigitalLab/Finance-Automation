@@ -70,6 +70,7 @@ class ReportJob(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     session_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     status = Column(String, nullable=False)  # "processing" | "success" | "error"
     result_json = Column(Text, nullable=True)  # full JSON blob of ReportResponse.model_dump()
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -197,7 +198,7 @@ class FATrialBalance(Base):
     """One loaded trial balance per month-end for the Financial Analysis Report. Reloading a month replaces it."""
     __tablename__ = "fa_trial_balances"
     __table_args__ = (
-        UniqueConstraint("period_year", "period_month", name="uq_fa_trial_balances_period"),
+        UniqueConstraint("uploaded_by", "period_year", "period_month", name="uq_fa_trial_balances_user_period"),
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)

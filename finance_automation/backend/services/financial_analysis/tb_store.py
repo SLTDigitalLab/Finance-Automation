@@ -13,18 +13,20 @@ from services.financial_analysis.tb_reader import AccountBalance, TrialBalance
 from utils.logger import logger
 
 
-def _find(db: Session, period: Period) -> Optional[FATrialBalance]:
-    return (
+def _find(db: Session, period: Period, user_id: Optional[int] = None) -> Optional[FATrialBalance]:
+    query = (
         db.query(FATrialBalance)
         .filter(FATrialBalance.period_year == period.year, FATrialBalance.period_month == period.month)
-        .first()
     )
+    if user_id is not None:
+        query = query.filter(FATrialBalance.uploaded_by == user_id)
+    return query.first()
 
 
 def save_trial_balance(db: Session, tb: TrialBalance, source_filename: str = None,
                        user_id: int = None) -> FATrialBalance:
-    """Stores the trial balance, replacing any already loaded for the same month."""
-    existing = _find(db, tb.period)
+    """Stores the trial balance, replacing any already loaded for the same month by this user."""
+    existing = _find(db, tb.period, user_id=user_id)
     if existing:
         db.query(FATrialBalanceAccount).filter(
             FATrialBalanceAccount.trial_balance_id == existing.id
@@ -55,12 +57,12 @@ def save_trial_balance(db: Session, tb: TrialBalance, source_filename: str = Non
         for bal in tb.accounts.values()
     ])
     db.commit()
-    logger.info(f"{'Replaced' if existing else 'Stored'} trial balance {tb.period.label} ({len(tb.accounts)} accounts)")
+    logger.info(f"{'Replaced' if existing else 'Stored'} trial balance {tb.period.label} for user {user_id} ({len(tb.accounts)} accounts)")
     return record
 
 
-def delete_trial_balance(db: Session, period: Period) -> bool:
-    record = _find(db, period)
+def delete_trial_balance(db: Session, period: Period, user_id: Optional[int] = None) -> bool:
+    record = _find(db, period, user_id=user_id)
     if record is None:
         return False
     db.query(FATrialBalanceAccount).filter(
@@ -68,12 +70,12 @@ def delete_trial_balance(db: Session, period: Period) -> bool:
     ).delete(synchronize_session=False)
     db.delete(record)
     db.commit()
-    logger.info(f"Deleted trial balance {period.label}")
+    logger.info(f"Deleted trial balance {period.label} for user {user_id}")
     return True
 
 
-def load_ytd(db: Session, period: Period) -> Optional[Dict[int, AccountBalance]]:
-    record = _find(db, period)
+def load_ytd(db: Session, period: Period, user_id: Optional[int] = None) -> Optional[Dict[int, AccountBalance]]:
+    record = _find(db, period, user_id=user_id)
     if record is None:
         return None
     rows = db.query(FATrialBalanceAccount).filter(FATrialBalanceAccount.trial_balance_id == record.id).all()
@@ -84,9 +86,12 @@ def load_ytd(db: Session, period: Period) -> Optional[Dict[int, AccountBalance]]
     }
 
 
-def list_periods(db: Session) -> List[FATrialBalance]:
+def list_periods(db: Session, user_id: Optional[int] = None) -> List[FATrialBalance]:
+    query = db.query(FATrialBalance)
+    if user_id is not None:
+        query = query.filter(FATrialBalance.uploaded_by == user_id)
     return (
-        db.query(FATrialBalance)
+        query
         .order_by(FATrialBalance.period_year.desc(), FATrialBalance.period_month.desc())
         .all()
     )

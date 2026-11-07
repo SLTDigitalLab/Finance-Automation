@@ -32,6 +32,7 @@ def save_budget_file(
     original_filename: str,
     user_name: Optional[str] = None,
     ytd_cumulate: bool = False,
+    user_id: Optional[int] = None,
 ) -> List[Dict]:
     """
     Validates the workbook at `upload_path` and stores it by period.
@@ -59,6 +60,7 @@ def save_budget_file(
             "filename": original_filename,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "uploaded_by": user_name,
+            "user_id": user_id,
             "lines_count": len(budget.lines) if budget.lines else len(budget.accounts),
             "operating_cost_ytd": budget.total_operating_cost.get("ytd"),
             "lines": budget.lines,
@@ -103,6 +105,7 @@ def save_budget_file(
                 "filename": original_filename,
                 "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "uploaded_by": user_name,
+                "user_id": user_id,
                 "lines_count": len(month_accounts),
                 "operating_cost_ytd": None,
                 "lines": {},

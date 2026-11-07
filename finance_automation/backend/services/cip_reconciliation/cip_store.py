@@ -38,42 +38,61 @@ class CIPFileMeta:
     uploaded_by: str
     period: str
     accounts_covered: List[str]
+    user_id: Optional[int] = None
 
 
-def _ensure_dirs():
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _user_upload_dir(user_id: Optional[int] = None) -> Path:
+    if user_id is not None:
+        return UPLOAD_DIR / str(user_id)
+    return UPLOAD_DIR
 
 
-def load_metadata() -> Dict[str, Any]:
-    _ensure_dirs()
-    if not METADATA_FILE.exists():
+def _user_output_dir(user_id: Optional[int] = None) -> Path:
+    if user_id is not None:
+        return OUTPUT_DIR / str(user_id)
+    return OUTPUT_DIR
+
+
+def _meta_path(user_id: Optional[int] = None) -> Path:
+    return _user_upload_dir(user_id) / "metadata.json"
+
+
+def _ensure_dirs(user_id: Optional[int] = None):
+    _user_upload_dir(user_id).mkdir(parents=True, exist_ok=True)
+    _user_output_dir(user_id).mkdir(parents=True, exist_ok=True)
+
+
+def load_metadata(user_id: Optional[int] = None) -> Dict[str, Any]:
+    _ensure_dirs(user_id)
+    meta_file = _meta_path(user_id)
+    if not meta_file.exists():
         return {"files": {}, "current_period": "Jul-26"}
     try:
-        with open(METADATA_FILE, "r", encoding="utf-8") as f:
+        with open(meta_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as exc:
-        logger.warning(f"Failed to read CIP metadata: {exc}")
+        logger.warning(f"Failed to read CIP metadata for user {user_id}: {exc}")
         return {"files": {}, "current_period": "Jul-26"}
 
 
-def save_metadata(meta: Dict[str, Any]):
-    _ensure_dirs()
+def save_metadata(meta: Dict[str, Any], user_id: Optional[int] = None):
+    _ensure_dirs(user_id)
+    meta_file = _meta_path(user_id)
     try:
-        with open(METADATA_FILE, "w", encoding="utf-8") as f:
+        with open(meta_file, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
     except Exception as exc:
-        logger.error(f"Failed to save CIP metadata: {exc}")
+        logger.error(f"Failed to save CIP metadata for user {user_id}: {exc}")
 
 
-def get_file_path(category: str, period: Optional[str] = None) -> Optional[Path]:
-    meta = load_metadata()
+def get_file_path(category: str, period: Optional[str] = None, user_id: Optional[int] = None) -> Optional[Path]:
+    meta = load_metadata(user_id)
     period = period or meta.get("current_period", "Jul-26")
     file_info = meta.get("files", {}).get(period, {}).get(category)
     if file_info:
         stored_name = file_info.get("filename")
         if stored_name:
-            p = UPLOAD_DIR / period / stored_name
+            p = _user_upload_dir(user_id) / period / stored_name
             if p.exists():
                 return p
 
@@ -93,9 +112,10 @@ def save_uploaded_file(
     period: str,
     uploaded_by: str,
     accounts_covered: Optional[List[str]] = None,
+    user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    _ensure_dirs()
-    period_dir = UPLOAD_DIR / period
+    _ensure_dirs(user_id)
+    period_dir = _user_upload_dir(user_id) / period
     period_dir.mkdir(parents=True, exist_ok=True)
 
     dest_path = period_dir / f"{category}_{original_name}"
@@ -104,7 +124,7 @@ def save_uploaded_file(
     file_size = dest_path.stat().st_size
     from datetime import datetime
 
-    meta = load_metadata()
+    meta = load_metadata(user_id)
     if period not in meta["files"]:
         meta["files"][period] = {}
 
@@ -117,23 +137,24 @@ def save_uploaded_file(
         uploaded_by=uploaded_by,
         period=period,
         accounts_covered=accounts_covered or ACCOUNTS,
+        user_id=user_id,
     )
 
     meta["files"][period][category] = asdict(file_meta)
     meta["current_period"] = period
-    save_metadata(meta)
+    save_metadata(meta, user_id)
     return asdict(file_meta)
 
 
-def remove_file(category: str, period: str) -> bool:
-    meta = load_metadata()
+def remove_file(category: str, period: str, user_id: Optional[int] = None) -> bool:
+    meta = load_metadata(user_id)
     file_info = meta.get("files", {}).get(period, {}).get(category)
     if not file_info:
         return False
 
     stored_name = file_info.get("filename")
     if stored_name:
-        p = UPLOAD_DIR / period / stored_name
+        p = _user_upload_dir(user_id) / period / stored_name
         if p.exists():
             try:
                 p.unlink()
@@ -141,12 +162,12 @@ def remove_file(category: str, period: str) -> bool:
                 logger.warning(f"Could not remove {p}: {e}")
 
     meta["files"][period].pop(category, None)
-    save_metadata(meta)
+    save_metadata(meta, user_id)
     return True
 
 
-def get_status(period: Optional[str] = None) -> Dict[str, Any]:
-    meta = load_metadata()
+def get_status(period: Optional[str] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
+    meta = load_metadata(user_id)
     period = period or meta.get("current_period", "Jul-26")
     period_files = meta.get("files", {}).get(period, {})
 
@@ -154,7 +175,7 @@ def get_status(period: Optional[str] = None) -> Dict[str, Any]:
     for cat in CATEGORIES:
         info = period_files.get(cat)
         if info:
-            p = UPLOAD_DIR / period / info.get("filename", "")
+            p = _user_upload_dir(user_id) / period / info.get("filename", "")
             exists = p.exists()
             categories_status[cat] = {
                 "uploaded": exists,

@@ -46,6 +46,26 @@ ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 SUMMARY_LINES = ["revenue", "operating_costs", "ebitda", "operating_profit", "profit_before_tax", "profit_after_tax"]
 
 
+def _user_upload_dir(user_id: int) -> Path:
+    return UPLOAD_DIR / str(user_id)
+
+
+def _user_mapping_dir(user_id: int) -> Path:
+    return _user_upload_dir(user_id) / "mapping"
+
+
+def _user_budget_dir(user_id: int) -> Path:
+    return _user_upload_dir(user_id) / "budget"
+
+
+def _user_output_dir(user_id: int) -> Path:
+    return OUTPUT_DIR / str(user_id)
+
+
+def _user_rem_dir(user_id: int) -> Path:
+    return settings.UPLOAD_DIR / "financial_analysis" / str(user_id) / "remaining_inputs"
+
+
 class GenerateRequest(BaseModel):
     year: int = Field(..., ge=2000, le=2100)
     quarter: int = Field(..., ge=1, le=4)
@@ -97,12 +117,12 @@ def get_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
-    records = tb_store.list_periods(db)
+    records = tb_store.list_periods(db, user_id=current_user.id)
     loaded = {Period(r.period_year, r.period_month) for r in records}
-    budgets = budget_store.list_budgets(BUDGET_DIR)
+    budgets = budget_store.list_budgets(_user_budget_dir(current_user.id))
     return {
         "periods": [_period_json(r) for r in records],
-        "mapping": mapping_store.mapping_info(MAPPING_DIR),
+        "mapping": mapping_store.mapping_info(_user_mapping_dir(current_user.id)),
         "budgets": budgets,
         "budget": budgets[0] if budgets else None,
         "quarters": _quarter_options(loaded),
@@ -123,7 +143,7 @@ async def upload_trial_balances(
         path = await _save_upload(file)
         try:
             tb = await run_in_threadpool(read_trial_balance, path)
-            existed = tb_store.load_ytd(db, tb.period) is not None
+            existed = tb_store.load_ytd(db, tb.period, user_id=current_user.id) is not None
             tb_store.save_trial_balance(db, tb, file.filename, current_user.id)
             results.append({
                 "filename": file.filename,
@@ -160,7 +180,7 @@ def delete_trial_balance(
         period = Period(year, month)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not tb_store.delete_trial_balance(db, period):
+    if not tb_store.delete_trial_balance(db, period, user_id=current_user.id):
         raise HTTPException(status_code=404, detail=f"No trial balance loaded for {period.label}.")
     log_audit(
         db=db, action="Delete Trial Balance", module=MODULE,
@@ -180,12 +200,13 @@ async def upload_budgets(
 ):
     """Reads one or more budget workbooks (monthly YTD budget files or multi-month workbooks). Each is stored by period."""
     results = []
+    budget_dir = _user_budget_dir(current_user.id)
     for file in files:
         path = await _save_upload(file)
         try:
             loaded_periods = await run_in_threadpool(
-                budget_store.save_budget_file, BUDGET_DIR, path, file.filename,
-                current_user.full_name, ytd_cumulate,
+                budget_store.save_budget_file, budget_dir, path, file.filename,
+                current_user.full_name, ytd_cumulate, current_user.id,
             )
             for item in loaded_periods:
                 results.append(item)
@@ -201,7 +222,7 @@ async def upload_budgets(
             results.append({"filename": file.filename, "status": "error", "error": f"Could not read the file: {exc}"})
         finally:
             path.unlink(missing_ok=True)
-    return {"results": results, "budgets": budget_store.list_budgets(BUDGET_DIR)}
+    return {"results": results, "budgets": budget_store.list_budgets(budget_dir)}
 
 
 @financial_analysis_router.delete("/budget/{year}/{month}")
@@ -217,7 +238,8 @@ def delete_budget(
         period = Period(year, month)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not budget_store.delete_budget(BUDGET_DIR, year, month):
+    budget_dir = _user_budget_dir(current_user.id)
+    if not budget_store.delete_budget(budget_dir, year, month):
         raise HTTPException(status_code=404, detail=f"No budget loaded for {period.label}.")
     log_audit(
         db=db, action="Delete FA Budget", module=MODULE,
@@ -234,7 +256,8 @@ def clear_all_budgets(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     """Remove all stored FA budgets."""
-    deleted_count = budget_store.clear_all_budgets(BUDGET_DIR)
+    budget_dir = _user_budget_dir(current_user.id)
+    deleted_count = budget_store.clear_all_budgets(budget_dir)
     log_audit(
         db=db, action="Clear FA Budgets", module=MODULE,
         description=f"Cleared {deleted_count} FA budget files",
@@ -252,9 +275,10 @@ async def upload_mapping(
 ):
     """Replaces the GL code mapping workbook (sheet '6.PL-EBITDA' layout) after validating it."""
     path = await _save_upload(file)
+    mapping_dir = _user_mapping_dir(current_user.id)
     try:
         mapping = await run_in_threadpool(
-            mapping_store.save_mapping, MAPPING_DIR, path, file.filename, current_user.full_name
+            mapping_store.save_mapping, mapping_dir, path, file.filename, current_user.full_name, current_user.id
         )
     except MappingFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -268,7 +292,7 @@ async def upload_mapping(
     )
     return {
         "status": "success",
-        "mapping": mapping_store.mapping_info(MAPPING_DIR),
+        "mapping": mapping_store.mapping_info(mapping_dir),
         "lines": [
             {"label": line.label, "ranges": [str(r) for r in line.ranges]}
             for line in mapping.lines.values()
@@ -303,18 +327,24 @@ async def generate_financial_analysis(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     quarter = Quarter(body.year, body.quarter)
+    mapping_dir = _user_mapping_dir(current_user.id)
+    budget_dir = _user_budget_dir(current_user.id)
+    rem_dir = _user_rem_dir(current_user.id)
+    out_dir = _user_output_dir(current_user.id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     try:
-        mapping = await run_in_threadpool(mapping_store.load_mapping, MAPPING_DIR)
+        mapping = await run_in_threadpool(mapping_store.load_mapping, mapping_dir)
     except MappingFormatError as exc:
         raise HTTPException(status_code=422, detail=f"The stored GL mapping no longer reads: {exc}") from exc
     if mapping is None:
         raise HTTPException(status_code=422, detail="Upload the GL code mapping workbook first.")
 
     # Load budget data if available
-    b_end = budget_store.load_budget(BUDGET_DIR, quarter.end)
-    b_start = budget_store.load_budget(BUDGET_DIR, quarter.previous().end) if quarter.quarter > 1 else None
+    b_end = budget_store.load_budget(budget_dir, quarter.end)
+    b_start = budget_store.load_budget(budget_dir, quarter.previous().end) if quarter.quarter > 1 else None
 
-    load = lru_cache(maxsize=None)(lambda period: tb_store.load_ytd(db, period))
+    load = lru_cache(maxsize=None)(lambda period: tb_store.load_ytd(db, period, user_id=current_user.id))
     try:
         analysis = build_analysis(quarter, load, mapping, budget_end=b_end, budget_start=b_start)
     except MissingPeriodsError as exc:
@@ -325,7 +355,7 @@ async def generate_financial_analysis(
         ) from exc
 
     trend = monthly_trend(quarter.end, load, mapping)
-    records = {Period(r.period_year, r.period_month): r for r in tb_store.list_periods(db)}
+    records = {Period(r.period_year, r.period_month): r for r in tb_store.list_periods(db, user_id=current_user.id)}
     used = [records[p] for p in required_periods(quarter)]
     notes = ["Trial balances used: " + "; ".join(
         f"{Period(r.period_year, r.period_month).label} ({r.source_filename})" for r in used)]
@@ -334,9 +364,9 @@ async def generate_financial_analysis(
               f"(YTD total {r.net_ytd:,.2f})" for r in used if abs(r.net_ytd) > 100]
 
     try:
-    # Load remaining inputs if present
+        # Load remaining inputs if present
         mobitel_writeup = None
-        mob_path = remaining_inputs_store.load_file("mobitel_writeup")
+        mob_path = remaining_inputs_store.load_file("mobitel_writeup", store_dir=rem_dir)
         if mob_path and mob_path.exists():
             try:
                 mobitel_writeup = await run_in_threadpool(MobitelWriteupReader().read, mob_path)
@@ -345,7 +375,7 @@ async def generate_financial_analysis(
                 logger.warning(f"Could not read Mobitel write-up: {exc}")
 
         group_pl_data = None
-        grp_path = remaining_inputs_store.load_file("group_pl")
+        grp_path = remaining_inputs_store.load_file("group_pl", store_dir=rem_dir)
         if grp_path and grp_path.exists():
             try:
                 group_pl_data = await run_in_threadpool(GroupPLReader().read, grp_path)
@@ -358,7 +388,7 @@ async def generate_financial_analysis(
         output_path = await run_in_threadpool(
             generate_report,
             ReportInputs(analysis, trend, notes),
-            OUTPUT_DIR,
+            out_dir,
             mobitel_writeup=mobitel_writeup,
             group_pl_data=group_pl_data,
         )
@@ -402,7 +432,7 @@ async def download_financial_analysis(
 ):
     if not FILENAME_PATTERN.match(filename):
         raise HTTPException(status_code=400, detail="Invalid file name.")
-    file_path = OUTPUT_DIR / filename
+    file_path = _user_output_dir(current_user.id) / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Report file not found. Generate it again.")
 
