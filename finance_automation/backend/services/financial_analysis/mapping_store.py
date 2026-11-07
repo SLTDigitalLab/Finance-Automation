@@ -13,7 +13,7 @@ MAPPING_FILE = "gl_mapping.xlsx"
 META_FILE = "gl_mapping.json"
 
 
-def save_mapping(store_dir: Path, upload_path: Path, original_filename: str, user_name: str = None) -> GLMapping:
+def save_mapping(store_dir: Path, upload_path: Path, original_filename: str, user_name: str = None, user_id: int = None) -> GLMapping:
     """Validates the workbook at `upload_path` and makes it the current mapping."""
     mapping = read_gl_mapping(upload_path)   # raises MappingFormatError
     store_dir = Path(store_dir)
@@ -23,6 +23,7 @@ def save_mapping(store_dir: Path, upload_path: Path, original_filename: str, use
         "filename": original_filename,
         "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "uploaded_by": user_name,
+        "user_id": user_id,
     }
     (store_dir / META_FILE).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return mapping

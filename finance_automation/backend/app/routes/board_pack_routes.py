@@ -28,10 +28,12 @@ FILENAME_PATTERN = re.compile(r"^Finance_Board_Pack_[A-Za-z]+_\d{4}_[0-9a-f]{8}\
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
-def _build(file_path: Path):
-    data = read_board_pack_workbook(str(file_path), lambda period: load_snapshot(HISTORY_DIR, period))
-    output_path = generate_board_pack(data, str(OUTPUT_DIR))
-    save_snapshot(HISTORY_DIR, data.period, data.snapshot)
+def _build(file_path: Path, user_output_dir: Path):
+    user_output_dir.mkdir(parents=True, exist_ok=True)
+    history_dir = user_output_dir / "history"
+    data = read_board_pack_workbook(str(file_path), lambda period: load_snapshot(history_dir, period))
+    output_path = generate_board_pack(data, str(user_output_dir))
+    save_snapshot(history_dir, data.period, data.snapshot)
     return data, Path(output_path)
 
 
@@ -56,12 +58,14 @@ async def generate_board_pack_report(
     if len(content) > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"File exceeds {settings.MAX_FILE_SIZE_MB} MB.")
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    upload_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    user_upload_dir = UPLOAD_DIR / str(current_user.id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = user_upload_dir / f"{uuid.uuid4().hex}{ext}"
     upload_path.write_bytes(content)
 
+    user_out_dir = OUTPUT_DIR / str(current_user.id)
     try:
-        data, output_path = await run_in_threadpool(_build, upload_path)
+        data, output_path = await run_in_threadpool(_build, upload_path, user_out_dir)
     except BoardPackError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -100,7 +104,7 @@ async def download_board_pack(
 ):
     if not FILENAME_PATTERN.match(filename):
         raise HTTPException(status_code=400, detail="Invalid file name.")
-    file_path = OUTPUT_DIR / filename
+    file_path = (OUTPUT_DIR / str(current_user.id)) / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Board pack file not found. Generate it again.")
 

@@ -53,6 +53,7 @@ def save_file(
     filename: str,
     uploader: Optional[str] = None,
     store_dir: Optional[Path] = None,
+    user_id: Optional[int] = None,
 ) -> Path:
     """
     Saves an uploaded remaining input file and updates persistence metadata.
@@ -76,6 +77,7 @@ def save_file(
         "stored_filename": dest_filename,
         "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "uploader": uploader,
+        "user_id": user_id,
         "size_bytes": dest_path.stat().st_size if dest_path.exists() else 0,
     }
     _save_metadata(target_dir, metadata)

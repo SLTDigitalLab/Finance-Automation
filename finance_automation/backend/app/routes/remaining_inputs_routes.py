@@ -36,6 +36,10 @@ ALLOWED_DOCX = {".docx"}
 ALLOWED_EXCEL = {".xlsx", ".xls", ".xlsm"}
 
 
+def _user_store_dir(user_id: int) -> Path:
+    return settings.UPLOAD_DIR / "financial_analysis" / str(user_id) / "remaining_inputs"
+
+
 async def _save_temp_upload(file: UploadFile, allowed_exts: set) -> Tuple[Path, str]:
     ext = Path(file.filename or "").suffix.lower()
     if ext not in allowed_exts:
@@ -75,11 +79,14 @@ async def upload_mobitel_writeup(
 
         # Save to store
         user_name = current_user.full_name if current_user else "System"
+        store_dir = _user_store_dir(current_user.id)
         saved_path = remaining_inputs_store.save_file(
             file_type="mobitel_writeup",
             path=temp_path,
             filename=orig_filename,
             uploader=user_name,
+            store_dir=store_dir,
+            user_id=current_user.id,
         )
     except Exception as exc:
         logger.exception(f"Failed to read/save Mobitel Write-up: {exc}")
@@ -132,11 +139,14 @@ async def upload_group_pl(
 
         # Save to store
         user_name = current_user.full_name if current_user else "System"
+        store_dir = _user_store_dir(current_user.id)
         saved_path = remaining_inputs_store.save_file(
             file_type="group_pl",
             path=temp_path,
             filename=orig_filename,
             uploader=user_name,
+            store_dir=store_dir,
+            user_id=current_user.id,
         )
     except Exception as exc:
         logger.exception(f"Failed to read/save Group P&L: {exc}")
@@ -178,25 +188,26 @@ def get_remaining_inputs_status(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
     """Returns current upload status and validation overview for remaining inputs."""
-    uploads = remaining_inputs_store.get_status()
+    store_dir = _user_store_dir(current_user.id)
+    uploads = remaining_inputs_store.get_status(store_dir=store_dir)
 
     # If files exist, generate validation dashboard
-    mob_path = remaining_inputs_store.load_file("mobitel_writeup")
-    grp_path = remaining_inputs_store.load_file("group_pl")
+    mob_path = remaining_inputs_store.load_file("mobitel_writeup", store_dir=store_dir)
+    grp_path = remaining_inputs_store.load_file("group_pl", store_dir=store_dir)
 
     mob_data = None
     if mob_path and mob_path.exists():
         try:
             mob_data = MobitelWriteupReader().read(mob_path)
         except Exception as exc:
-            logger.warning(f"Could not parse stored mobitel writeup: {exc}")
+            logger.warning(f"Could not parse stored mobitel writeup for user {current_user.id}: {exc}")
 
     grp_data = None
     if grp_path and grp_path.exists():
         try:
             grp_data = GroupPLReader().read(grp_path)
         except Exception as exc:
-            logger.warning(f"Could not parse stored group pl: {exc}")
+            logger.warning(f"Could not parse stored group pl for user {current_user.id}: {exc}")
 
     dashboard = build_validation_dashboard(analysis=None, mobitel_writeup=mob_data, group_pl_data=grp_data)
 
@@ -221,7 +232,13 @@ def delete_remaining_input(
             detail=f"Invalid file_type '{file_type}'. Must be 'mobitel_writeup' or 'group_pl'.",
         )
 
-    deleted = remaining_inputs_store.delete_file(norm_type)
+    store_dir = _user_store_dir(current_user.id)
+    deleted = remaining_inputs_store.delete_file(norm_type, store_dir=store_dir)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No file found to delete for '{file_type}'.",
+        )
 
     log_audit(
         db=db,
@@ -236,5 +253,5 @@ def delete_remaining_input(
     return {
         "status": "success",
         "deleted": deleted,
-        "uploads": remaining_inputs_store.get_status(),
+        "uploads": remaining_inputs_store.get_status(store_dir=store_dir),
     }

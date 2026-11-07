@@ -120,6 +120,10 @@ async def startup_event():
             db.commit()
             logger.info("Admin seeded successfully: admin@finance.com / adminpassword")
         db.close()
+
+        # Run user privacy and file ownership migrations
+        from app.services.migration_service import run_privacy_migration
+        run_privacy_migration(engine, SessionLocal)
     except Exception as e:
         logger.error(f"Error seeding DB: {e}")
 
