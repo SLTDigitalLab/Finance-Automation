@@ -18,6 +18,7 @@ from app.routes.remaining_inputs_routes import remaining_inputs_router
 from app.routes.cip_routes import cip_router
 from app.routes.accrual_entry_routes import accrual_entry_router
 from app.routes.use_case_routes import use_case_router
+from app.routes.debtor_age_analysis_routes import debtor_age_router
 from utils.logger import logger
 
 app = FastAPI(
@@ -46,6 +47,7 @@ app.include_router(remaining_inputs_router)
 app.include_router(cip_router)
 app.include_router(accrual_entry_router)
 app.include_router(use_case_router)
+app.include_router(debtor_age_router)
 
 
 @app.on_event("startup")

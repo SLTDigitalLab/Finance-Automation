@@ -301,3 +301,39 @@ async def download_accrual_report(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Report not found. Generate it before downloading.")
     return FileResponse(path, filename=filename, media_type=EXCEL_MEDIA_TYPE)
+
+
+@accrual_entry_router.post("/reset")
+async def reset_accrual_entry_data(
+    request: Request,
+    period: str = Query("Sep-26"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Reset all uploaded source files and generated reports for the current user and period."""
+    folder = _period_folder(period)
+    upload_folder = UPLOAD_DIR / str(current_user.id) / folder
+    output_folder = OUTPUT_DIR / str(current_user.id) / folder
+
+    deleted_items = []
+    for target_dir in [upload_folder, output_folder]:
+        if target_dir.exists():
+            for f in target_dir.glob("*.xlsx"):
+                f.unlink(missing_ok=True)
+                deleted_items.append(f.name)
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        action="Reset",
+        module=MODULE,
+        description=f"Reset Accrual Entry Report uploads and output for period {period}.",
+        request=request,
+    )
+
+    return {
+        "message": f"Accrual Entry data for {period} has been reset to the initial state.",
+        "deleted": deleted_items,
+    }
+

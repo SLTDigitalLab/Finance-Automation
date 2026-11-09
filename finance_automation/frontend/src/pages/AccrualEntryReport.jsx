@@ -15,6 +15,7 @@ import {
   Assessment as AssessmentIcon,
   CheckCircle as CheckCircleIcon,
   CloudUpload as UploadIcon,
+  TrendingUp as TrendingUpIcon,
   Dashboard as DashboardIcon,
   Delete as DeleteIcon,
   Download as DownloadIcon,
@@ -24,8 +25,10 @@ import {
   PlayArrow as GenerateIcon,
   Receipt as ReceiptIcon,
   Refresh as RefreshIcon,
+  RestartAlt as ResetIcon,
   Slideshow as BoardPackIcon,
   TableChart as TableIcon,
+  Paid as DebtorIcon,
 } from "@mui/icons-material";
 
 import { useAuth } from "../contexts/AuthContext";
@@ -35,6 +38,7 @@ import {
   downloadAccrualEntryReport,
   generateAccrualEntryReport,
   getAccrualEntryStatus,
+  resetAccrualEntryData,
   uploadAccrualEntryFile,
 } from "../services/api";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
@@ -58,13 +62,14 @@ const INPUTS = [
 ];
 
 const NAV_ITEMS = [
-  { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Analytics", icon: TrendingUpIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: AssessmentIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: AccountBalanceIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: ReceiptIcon, path: "/accrual-entry-report", active: true },
+  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -78,59 +83,91 @@ const toApiPeriod = (monthValue) => {
 
 function InputCard({ input, file, busy, onSelect, onDelete }) {
   const fileInputRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+  const isUploaded = !!file?.uploaded;
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped) onSelect(input.key, dropped);
+  };
+
   return (
-    <Paper elevation={0} className="rounded-2xl border border-slate-200 p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-base font-black text-[#082f49]">{input.title}</h3>
-          <p className="mt-1 text-sm font-medium text-slate-500">{input.description}</p>
+    <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-extrabold text-[#082f49]">{input.title}</h3>
+            {isUploaded && <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Uploaded</span>}
+          </div>
+          <p className="mt-1 text-sm text-slate-500">{input.description}</p>
         </div>
         <Chip
           size="small"
-          icon={file?.uploaded ? <CheckCircleIcon /> : <TableIcon />}
-          label={file?.uploaded ? "Ready" : "Required"}
-          color={file?.uploaded ? "success" : "default"}
-          variant={file?.uploaded ? "filled" : "outlined"}
+          icon={isUploaded ? <CheckCircleIcon /> : <TableIcon />}
+          label={isUploaded ? "Ready" : "Required"}
+          color={isUploaded ? "success" : "default"}
+          variant={isUploaded ? "filled" : "outlined"}
         />
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx"
-          hidden
-          onChange={(event) => {
-            const selected = event.target.files?.[0];
-            if (selected) onSelect(input.key, selected);
-            event.target.value = "";
-          }}
-        />
-        <Button
-          variant="outlined"
-          startIcon={busy ? <CircularProgress size={16} /> : <UploadIcon />}
-          disabled={busy}
-          onClick={() => fileInputRef.current?.click()}
-          sx={{ textTransform: "none", fontWeight: 800, borderRadius: 2 }}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".xlsx,.xls,.xlsm"
+        hidden
+        onChange={(event) => {
+          const selected = event.target.files?.[0];
+          if (selected) onSelect(input.key, selected);
+          event.target.value = "";
+        }}
+      />
+
+      {!isUploaded ? (
+        <div
+          onClick={() => !busy && fileInputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          className={`mt-4 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 cursor-pointer transition-colors ${
+            dragging ? "border-[#1B6B93] bg-[#edf4fb]" : "border-slate-300 bg-slate-50 hover:border-[#1B6B93] hover:bg-[#f0f7ff]"
+          }`}
         >
-          {file?.uploaded ? "Replace workbook" : "Upload workbook"}
-        </Button>
-        {file?.uploaded && (
-          <>
-            <span className="min-w-0 break-all text-sm font-semibold text-slate-600">{file.filename}</span>
-            <Tooltip title={`Remove ${input.title}`}>
-              <button
-                type="button"
-                onClick={() => onDelete(input.key, input.title)}
-                className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                aria-label={`Remove ${input.title}`}
-              >
-                <DeleteIcon fontSize="small" />
-              </button>
-            </Tooltip>
-          </>
-        )}
-      </div>
+          {busy ? (
+            <CircularProgress size={32} sx={{ color: "#1B6B93" }} />
+          ) : (
+            <UploadIcon sx={{ fontSize: 36, color: "#b08a2e" }} />
+          )}
+          <p className="text-sm font-bold text-[#082f49]">
+            {busy ? "Uploading..." : "Drop workbook here or click to browse"}
+          </p>
+          <p className="text-xs text-slate-500">.xlsx or .xls</p>
+        </div>
+      ) : (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button
+            variant="outlined"
+            startIcon={busy ? <CircularProgress size={16} /> : <UploadIcon />}
+            disabled={busy}
+            onClick={() => fileInputRef.current?.click()}
+            sx={{ textTransform: "none", fontWeight: 800, borderRadius: 2 }}
+          >
+            Replace workbook
+          </Button>
+          <span className="min-w-0 break-all text-sm font-semibold text-slate-600">{file.filename}</span>
+          <Tooltip title={`Remove ${input.title}`}>
+            <button
+              type="button"
+              onClick={() => onDelete(input.key, input.title)}
+              className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+              aria-label={`Remove ${input.title}`}
+            >
+              <DeleteIcon fontSize="small" />
+            </button>
+          </Tooltip>
+        </div>
+      )}
     </Paper>
   );
 }
@@ -145,6 +182,7 @@ export default function AccrualEntryReport() {
   const [busyCategory, setBusyCategory] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [generationStage, setGenerationStage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -256,6 +294,24 @@ export default function AccrualEntryReport() {
     }
   };
 
+  const handleReset = async () => {
+    setErrorMessage("");
+    setSuccessMessage("");
+    setResetting(true);
+    try {
+      const res = await resetAccrualEntryData(period);
+      setProgress(0);
+      setGenerationStage("");
+      setReportSummary(null);
+      setSuccessMessage(res.message || "All uploaded documents and generated reports have been reset.");
+      await refreshStatus();
+    } catch (err) {
+      setErrorMessage(err.message || "Failed to reset Accrual Entry data.");
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const handleLogout = async () => {
     await logout();
     navigate("/login");
@@ -312,7 +368,7 @@ export default function AccrualEntryReport() {
           <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 px-4 py-3 shadow-sm backdrop-blur md:px-8">
             <div className="flex items-center justify-between gap-4">
               <img src={lightLogo} alt="SLT Mobitel Logo" className="h-9 object-contain lg:hidden" />
-              <div className="min-w-0 text-left md:text-center">
+              <div className="flex-1 text-center">
                 <h1 className="truncate text-lg font-black text-[#082f49] md:text-2xl">Accrual Entry Report</h1>
                 <p className="hidden text-sm font-bold text-slate-500 sm:block">
                   Monthly journal entries built from payment details, prior accruals, and account analysis
@@ -334,15 +390,27 @@ export default function AccrualEntryReport() {
                   InputLabelProps={{ shrink: true }}
                   sx={{ width: 170, "& .MuiInputBase-root": { bgcolor: "white", borderRadius: 2 } }}
                 />
-                <Tooltip title="Refresh input status">
-                  <button
-                    type="button"
-                    onClick={refreshStatus}
-                    className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    aria-label="Refresh input status"
-                  >
-                    <RefreshIcon fontSize="small" />
-                  </button>
+                <Tooltip title="Reset uploaded workbooks and generated report">
+                  <span>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      size="small"
+                      startIcon={resetting ? <CircularProgress size={14} color="inherit" /> : <ResetIcon fontSize="small" />}
+                      onClick={handleReset}
+                      disabled={resetting || generating}
+                      sx={{
+                        textTransform: "none",
+                        fontWeight: 700,
+                        borderRadius: 1.5,
+                        borderColor: "#fca5a5",
+                        color: "#b91c1c",
+                        "&:hover": { borderColor: "#ef4444", backgroundColor: "#fef2f2" },
+                      }}
+                    >
+                      {resetting ? "Resetting..." : "Reset"}
+                    </Button>
+                  </span>
                 </Tooltip>
               </div>
             </div>
@@ -437,7 +505,7 @@ export default function AccrualEntryReport() {
                         {downloading ? "Downloading..." : "Download Report"}
                       </Button>
                     )}
-                  </div>
+                    </div>
                 </div>
 
                 {/* Visual Progress Bar while generating or when completed */}

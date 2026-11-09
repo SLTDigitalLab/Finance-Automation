@@ -18,6 +18,7 @@ import {
   Assessment as FinancialAnalysisIcon,
   CheckCircle as CheckCircleIcon,
   CloudUpload as UploadIcon,
+  TrendingUp as TrendingUpIcon,
   Dashboard as DashboardIcon,
   Delete as DeleteIcon,
   Description as FileIcon,
@@ -40,6 +41,7 @@ import {
   VerifiedUser as VerifiedUserIcon,
   WarningAmber as WarningIcon,
   Receipt as AccrualReportIcon,
+  Paid as DebtorIcon,
 } from "@mui/icons-material";
 import {
   deleteFABudget,
@@ -71,13 +73,14 @@ const theme = createTheme({
 });
 
 const NAV_ITEMS = [
-  { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Analytics", icon: TrendingUpIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis", active: true },
   { label: "CIP Reconciliation", icon: BudgetIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
+  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -163,9 +166,8 @@ function SummaryTable({ comparison }) {
               <td className="py-2 pr-2 text-right font-semibold tabular-nums">{formatMn(row.base)}</td>
               <td className="py-2 pr-2 text-right font-semibold tabular-nums">{formatMn(row.variance)}</td>
               <td
-                className={`py-2 text-right font-extrabold tabular-nums ${
-                  Math.abs(row.variance) < 0.5 ? "text-slate-600" : row.favourable ? "text-emerald-700" : "text-red-700"
-                }`}
+                className={`py-2 text-right font-extrabold tabular-nums ${Math.abs(row.variance) < 0.5 ? "text-slate-600" : row.favourable ? "text-emerald-700" : "text-red-700"
+                  }`}
               >
                 {formatPct(row.variance_pct)}
               </td>
@@ -460,8 +462,8 @@ export default function FinancialAnalysis() {
                     type="button"
                     onClick={() => navigate(path)}
                     className={`mb-2 flex h-12 w-full items-center gap-3 rounded-lg px-4 text-left text-sm font-extrabold transition ${active
-                        ? "bg-white text-[#071b2a] shadow-lg"
-                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                      ? "bg-white text-[#071b2a] shadow-lg"
+                      : "text-slate-300 hover:bg-white/10 hover:text-white"
                       }`}
                   >
                     <Icon fontSize="small" />
@@ -620,9 +622,8 @@ export default function FinancialAnalysis() {
                         setBudgetDragging(false);
                         addBudgetFiles(e.dataTransfer.files);
                       }}
-                      className={`mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition ${
-                        budgetDragging ? "border-[#E8A838] bg-amber-50" : "border-slate-300 bg-slate-50 hover:border-[#E8A838] hover:bg-amber-50/60"
-                      }`}
+                      className={`mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition ${budgetDragging ? "border-[#E8A838] bg-amber-50" : "border-slate-300 bg-slate-50 hover:border-[#E8A838] hover:bg-amber-50/60"
+                        }`}
                     >
                       <BudgetIcon sx={{ fontSize: 40, color: "#E8A838" }} />
                       <p className="mt-3 text-sm font-extrabold text-[#082f49]">
