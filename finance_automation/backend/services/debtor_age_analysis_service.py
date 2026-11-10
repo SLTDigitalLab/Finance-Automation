@@ -18,17 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
 
-logger = logging.getLogger(__name__)
+from services.debtor_age_template_data import get_hardcoded_template_workbook
 
-TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent / "templates" / "debtor_age_analysis_template.xlsx"
-)
-BACKUP_TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "Input"
-    / "agging"
-    / "SLT_Debtor_Age_Analysis_Report_301026 (2).xlsx"
-)
+logger = logging.getLogger(__name__)
 
 REQUIRED_NETTING_SHEET = "SLT_AR_AP_Netting_Report_301026"
 REQUIRED_DEBTOR_SHEETS = {"Summary", "122105 (Voice)", "122107  (Non Voice)"}
@@ -111,16 +103,6 @@ def _to_date(val: Any) -> Optional[date]:
         return None
 
 
-def _get_template_path() -> Path:
-    if TEMPLATE_PATH.exists():
-        return TEMPLATE_PATH
-    if BACKUP_TEMPLATE_PATH.exists():
-        return BACKUP_TEMPLATE_PATH
-    raise DebtorAgeAnalysisError(
-        "Debtor Age Analysis report reference template not found on server."
-    )
-
-
 def generate_debtor_age_analysis(
     debtor_aging_path: Path,
     netting_report_path: Path,
@@ -129,7 +111,7 @@ def generate_debtor_age_analysis(
     """
     Generate the SLT_Debtor_Age_Analysis_Report.xlsx from the uploaded inputs.
     Preserves 100% of formatting, layout, customer numbers, and columns from the
-    reference manual output.
+    reference manual output using the hardcoded in-memory workbook structure.
     """
     logger.info("Validating input workbooks...")
     validate_debtor_aging_file(debtor_aging_path)
@@ -178,18 +160,13 @@ def generate_debtor_age_analysis(
 
     as_on_date = REPORT_DATE_DEFAULT
     if latest_due:
-        # Determine month end of the latest activity
         import calendar
-
         last_day = calendar.monthrange(latest_due.year, latest_due.month)[1]
         as_on_date = latest_due.replace(day=last_day)
 
-    # 2. Load the template
-    template_file = _get_template_path()
+    # 2. Load the hardcoded workbook structure directly in memory (zero external file dependency)
+    wb_out = get_hardcoded_template_workbook()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(str(template_file), str(output_path))
-
-    wb_out = openpyxl.load_workbook(str(output_path))
     if "SLT_Debtor_Age_Analysis_Report_" not in wb_out.sheetnames:
         raise DebtorAgeAnalysisError(
             "Reference template does not contain 'SLT_Debtor_Age_Analysis_Report_' sheet."
