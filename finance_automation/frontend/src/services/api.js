@@ -796,6 +796,38 @@ export async function downloadBoardPack(filename) {
   URL.revokeObjectURL(localUrl);
 }
 
+export async function generateBoardPackSlides(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/board-pack-slides/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to generate the Ratio and Balance Sheet slides");
+}
+
+export async function downloadBoardPackSlides(filename) {
+  const response = await fetch(
+    `${API_BASE}/board-pack-slides/download/${encodeURIComponent(filename)}`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to download the PowerPoint");
+  }
+
+  const blob = await response.blob();
+  const localUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = localUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(localUrl);
+}
+
 // Financial Analysis Report
 export async function getFinancialAnalysisStatus() {
   const response = await fetch(`${API_BASE}/financial-analysis/status`, {
@@ -1199,4 +1231,3 @@ export async function resetCipData(period = "Jul-26") {
   );
   return safeJsonResponse(response, "Failed to reset CIP Reconciliation data");
 }
-

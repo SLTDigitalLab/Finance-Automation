@@ -36,6 +36,7 @@ import {
 } from "@mui/icons-material";
 import { generateBoardPack, downloadBoardPack } from "../services/api";
 import { visibleNavItems } from "../config/useCases";
+import BoardPackFinancialSlides from "../components/BoardPackFinancialSlides";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
 
 const theme = createTheme({
@@ -435,6 +436,9 @@ export default function FinanceBoardPack() {
                     ))}
                   </ol>
                 </Paper>
+              </div>
+              <div className="mx-auto mt-6 max-w-6xl">
+                <BoardPackFinancialSlides />
               </div>
             </div>
 
