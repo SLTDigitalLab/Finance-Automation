@@ -13,6 +13,7 @@ from app.routes.audit_routes import audit_router
 from app.routes.forecasting import forecast_router
 from app.routes.anomaly_routes import anomaly_router
 from app.routes.board_pack_routes import board_pack_router
+from app.routes.board_pack_slides_routes import board_pack_slides_router
 from app.routes.financial_analysis_routes import financial_analysis_router
 from app.routes.remaining_inputs_routes import remaining_inputs_router
 from app.routes.cip_routes import cip_router
@@ -42,6 +43,7 @@ app.include_router(audit_router)
 app.include_router(forecast_router)
 app.include_router(anomaly_router)
 app.include_router(board_pack_router)
+app.include_router(board_pack_slides_router)
 app.include_router(financial_analysis_router)
 app.include_router(remaining_inputs_router)
 app.include_router(cip_router)
