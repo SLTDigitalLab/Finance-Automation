@@ -16,6 +16,7 @@ import {
 import {
   CheckCircle as CheckCircleIcon,
   CloudUpload as UploadIcon,
+  TrendingUp as TrendingUpIcon,
   Dashboard as DashboardIcon,
   Delete as DeleteIcon,
   Description as FileIcon,
@@ -23,6 +24,7 @@ import {
   ExitToApp as LogoutIcon,
   Person as PersonIcon,
   QueryStats as ForecastIcon,
+  RestartAlt as ResetIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
   Assessment as FinancialAnalysisIcon,
@@ -30,9 +32,11 @@ import {
   WarningAmber as WarningIcon,
   AccountBalance as CIPAccountIcon,
   Receipt as AccrualReportIcon,
+  Paid as DebtorIcon,
 } from "@mui/icons-material";
 import { generateBoardPack, downloadBoardPack } from "../services/api";
 import { visibleNavItems } from "../config/useCases";
+import BoardPackFinancialSlides from "../components/BoardPackFinancialSlides";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
 
 const theme = createTheme({
@@ -47,13 +51,14 @@ const theme = createTheme({
 });
 
 const NAV_ITEMS = [
-  { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Analytics", icon: TrendingUpIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack", active: true },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
+  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -122,6 +127,10 @@ export default function FinanceBoardPack() {
     setResult(null);
     setError("");
     if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const handleReset = () => {
+    clearFile();
   };
 
   const handleGenerate = async () => {
@@ -217,6 +226,28 @@ export default function FinanceBoardPack() {
                 </div>
 
                 <div className="flex items-center gap-3">
+                  <Tooltip title="Reset uploaded file and generated report">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        color="error"
+                        size="small"
+                        startIcon={<ResetIcon fontSize="small" />}
+                        onClick={handleReset}
+                        disabled={generating || (!file && !result)}
+                        sx={{
+                          textTransform: "none",
+                          fontWeight: 700,
+                          borderRadius: 1.5,
+                          borderColor: "#fca5a5",
+                          color: "#b91c1c",
+                          "&:hover": { borderColor: "#ef4444", backgroundColor: "#fef2f2" },
+                        }}
+                      >
+                        Reset
+                      </Button>
+                    </span>
+                  </Tooltip>
                   <button
                     type="button"
                     onClick={() => navigate("/profile")}
@@ -405,6 +436,9 @@ export default function FinanceBoardPack() {
                     ))}
                   </ol>
                 </Paper>
+              </div>
+              <div className="mx-auto mt-6 max-w-6xl">
+                <BoardPackFinancialSlides />
               </div>
             </div>
 

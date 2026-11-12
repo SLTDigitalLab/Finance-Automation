@@ -18,6 +18,7 @@ import FinanceBoardPack from "./pages/FinanceBoardPack";
 import FinancialAnalysis from "./pages/FinancialAnalysis";
 import CIPReconciliation from "./pages/CIPReconciliation";
 import AccrualEntryReport from "./pages/AccrualEntryReport";
+import DebtorAgeAnalysis from "./pages/DebtorAgeAnalysis";
 
 /**
  * RootHandler — handles the root "/" route.
@@ -156,6 +157,17 @@ export default function App() {
               <ProtectedRoute allowedRoles={["User", "Admin"]}>
                 <UseCaseRoute useCase="use_case_5">
                   <AccrualEntryReport />
+                </UseCaseRoute>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/debtor-age-analysis"
+            element={
+              <ProtectedRoute allowedRoles={["User", "Admin"]}>
+                <UseCaseRoute useCase="use_case_6">
+                  <DebtorAgeAnalysis />
                 </UseCaseRoute>
               </ProtectedRoute>
             }

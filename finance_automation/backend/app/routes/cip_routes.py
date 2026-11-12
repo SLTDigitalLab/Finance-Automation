@@ -373,3 +373,44 @@ async def download_cip_report(
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+@cip_router.post("/reset")
+async def reset_cip_data(
+    request: Request,
+    period: str = Query("Jul-26"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Reset all uploaded source files and generated reports for the current user and period."""
+    clean_p = period.replace(" ", "_").replace("-", "_")
+    upload_folder = UPLOAD_DIR / str(current_user.id) / clean_p
+    output_folder = OUTPUT_DIR / str(current_user.id)
+
+    deleted_items = []
+    if upload_folder.exists():
+        for f in upload_folder.glob("*"):
+            if f.is_file():
+                f.unlink(missing_ok=True)
+                deleted_items.append(f.name)
+
+    if output_folder.exists():
+        for f in output_folder.glob(f"*{clean_p}*"):
+            if f.is_file():
+                f.unlink(missing_ok=True)
+                deleted_items.append(f.name)
+
+    log_audit(
+        db=db,
+        action="Reset",
+        module=MODULE,
+        description=f"Reset CIP Reconciliation uploads and report for period {period}.",
+        user_id=current_user.id,
+        user_name=current_user.full_name or current_user.email,
+        request=request,
+    )
+
+    return {
+        "message": f"CIP Reconciliation data for {period} has been reset to the initial state.",
+        "deleted": deleted_items,
+    }

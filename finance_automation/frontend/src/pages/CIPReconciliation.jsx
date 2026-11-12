@@ -28,6 +28,7 @@ import {
   Assessment as FinancialAnalysisIcon,
   CheckCircle as CheckCircleIcon,
   CloudUpload as UploadIcon,
+  TrendingUp as TrendingUpIcon,
   Dashboard as DashboardIcon,
   Delete as DeleteIcon,
   Description as FileIcon,
@@ -39,18 +40,21 @@ import {
   PlayArrow as ReconcileIcon,
   QueryStats as ForecastIcon,
   Refresh as RefreshIcon,
+  RestartAlt as ResetIcon,
   Search as SearchIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
   TableChart as TableIcon,
   WarningAmber as WarningIcon,
   Receipt as AccrualReportIcon,
+  Paid as DebtorIcon,
 } from "@mui/icons-material";
 import {
   deleteCipFile,
   downloadCipReport,
   generateCipReport,
   getCipStatus,
+  resetCipData,
   runCipReconciliation,
   uploadCipFile,
 } from "../services/api";
@@ -69,13 +73,14 @@ const theme = createTheme({
 });
 
 const NAV_ITEMS = [
-  { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Analytics", icon: TrendingUpIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting" },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation", active: true },
   { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
+  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
@@ -187,6 +192,7 @@ export default function CIPReconciliation() {
   const [uploadingCategory, setUploadingCategory] = useState(null);
   const [reconciling, setReconciling] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [reconResult, setReconResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -258,6 +264,23 @@ export default function CIPReconciliation() {
       await refreshStatus();
     } catch (err) {
       setErrorMessage(err.message || "Failed to remove file");
+    }
+  };
+
+  // Handle reset
+  const handleReset = async () => {
+    setErrorMessage("");
+    setSuccessMessage("");
+    setResetting(true);
+    try {
+      const res = await resetCipData(period);
+      setReconResult(null);
+      setSuccessMessage(res.message || "CIP data has been reset to the initial state.");
+      await refreshStatus();
+    } catch (err) {
+      setErrorMessage(err.message || "Failed to reset CIP data.");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -385,6 +408,28 @@ export default function CIPReconciliation() {
                 </div>
 
                 <div className="flex items-center gap-3">
+                  <Tooltip title="Reset all uploaded files and generated reports for this period">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        color="error"
+                        size="small"
+                        startIcon={resetting ? <CircularProgress size={14} color="inherit" /> : <ResetIcon fontSize="small" />}
+                        onClick={handleReset}
+                        disabled={resetting || reconciling || generatingReport}
+                        sx={{
+                          textTransform: "none",
+                          fontWeight: 700,
+                          borderRadius: 1.5,
+                          borderColor: "#fca5a5",
+                          color: "#b91c1c",
+                          "&:hover": { borderColor: "#ef4444", backgroundColor: "#fef2f2" },
+                        }}
+                      >
+                        {resetting ? "Resetting..." : "Reset"}
+                      </Button>
+                    </span>
+                  </Tooltip>
                   <div className="hidden sm:flex items-center space-x-2 bg-slate-50 border border-slate-300 rounded-lg px-3 py-1">
                     <span className="text-xs font-semibold text-slate-600">Period:</span>
                     <TextField

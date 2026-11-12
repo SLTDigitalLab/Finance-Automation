@@ -796,6 +796,38 @@ export async function downloadBoardPack(filename) {
   URL.revokeObjectURL(localUrl);
 }
 
+export async function generateBoardPackSlides(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/board-pack-slides/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to generate the Ratio and Balance Sheet slides");
+}
+
+export async function downloadBoardPackSlides(filename) {
+  const response = await fetch(
+    `${API_BASE}/board-pack-slides/download/${encodeURIComponent(filename)}`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to download the PowerPoint");
+  }
+
+  const blob = await response.blob();
+  const localUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = localUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(localUrl);
+}
+
 // Financial Analysis Report
 export async function getFinancialAnalysisStatus() {
   const response = await fetch(`${API_BASE}/financial-analysis/status`, {
@@ -1093,4 +1125,109 @@ export async function downloadAccrualEntryReport(filename, period = "Sep-26") {
   anchor.click();
   anchor.remove();
   window.URL.revokeObjectURL(downloadUrl);
+}
+
+
+// ─── Use Case 6: Debtor Age Analysis Report ────────────────────────────────
+
+export async function getDebtorAgeStatus() {
+  const response = await fetch(`${API_BASE}/debtor-age/status`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to load Debtor Age Analysis status");
+}
+
+export async function uploadDebtorAgingFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE}/debtor-age/upload/debtor-aging`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to upload debtor aging file");
+  }
+  return response.json();
+}
+
+export async function uploadNettingReportFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE}/debtor-age/upload/netting-report`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to upload AR/AP netting report");
+  }
+  return response.json();
+}
+
+export async function deleteDebtorAgeFile(fileKey) {
+  const response = await fetch(
+    `${API_BASE}/debtor-age/upload/${encodeURIComponent(fileKey)}`,
+    { method: "DELETE", headers: getAuthHeaders() }
+  );
+  return safeJsonResponse(response, "Failed to delete file");
+}
+
+export async function generateDebtorAgeReport() {
+  const response = await fetch(`${API_BASE}/debtor-age/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to generate Debtor Age Analysis Report");
+}
+
+export async function downloadDebtorAgeReport(
+  filename = "SLT_Debtor_Age_Analysis_Report.xlsx"
+) {
+  const response = await fetch(`${API_BASE}/debtor-age/download`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await readApiError(response, "Failed to download Debtor Age report");
+    throw new Error(errorText);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function resetDebtorAgeData() {
+  const response = await fetch(`${API_BASE}/debtor-age/reset`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to reset Debtor Age Analysis data");
+}
+
+export async function resetAccrualEntryData(period = "Sep-26") {
+  const response = await fetch(
+    `${API_BASE}/accrual-entry/reset?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, "Failed to reset Accrual Entry data");
+}
+
+export async function resetCipData(period = "Jul-26") {
+  const response = await fetch(
+    `${API_BASE}/cip/reset?period=${encodeURIComponent(period)}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+  return safeJsonResponse(response, "Failed to reset CIP Reconciliation data");
 }

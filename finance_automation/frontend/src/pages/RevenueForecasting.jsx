@@ -55,6 +55,7 @@ import {
   Assessment as FinancialAnalysisIcon,
   AccountBalance as CIPAccountIcon,
   Receipt as AccrualReportIcon,
+  Paid as DebtorIcon,
 } from "@mui/icons-material";
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes polling interval
@@ -71,13 +72,14 @@ const theme = createTheme({
 });
 
 const NAV_ITEMS = [
-  { label: "Dashboard", icon: DashboardIcon, path: "/dashboard" },
+  { label: "Revenue Analytics", icon: TrendingUpIcon, path: "/dashboard" },
   { label: "Revenue Forecasting", icon: ForecastIcon, path: "/forecasting", active: true },
   { label: "Anomaly & Fraud Detection", icon: SecurityIcon, path: "/anomalies" },
   { label: "Finance Board Pack", icon: BoardPackIcon, path: "/board-pack" },
   { label: "Financial Analysis", icon: FinancialAnalysisIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: CIPAccountIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: AccrualReportIcon, path: "/accrual-entry-report" },
+  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
