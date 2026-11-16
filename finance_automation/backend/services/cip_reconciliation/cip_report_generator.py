@@ -1,292 +1,283 @@
 """
 CIP Report Generator
-Generates the Excel reconciliation report in exact alignment with reference output:
-CIP reconciliation report_Jul26_output file.xlsx
+Generates the single-sheet CIP rollforward in the supplied report layout.
 """
+from copy import copy
+from datetime import datetime
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Union
 
 import openpyxl
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .cip_reader import ACCOUNTS
+from .cip_reader import previous_period
 from .cip_reconciliation_engine import CIPReconciliationResult
 
 logger = logging.getLogger(__name__)
 
+TEMPLATE_PATH = Path(__file__).parent / "templates" / "cip_report_template.xlsx"
+TEMPLATE_ACCOUNT_COUNT = 6
+
 
 class CIPReportGenerator:
-    """Generates the CIP Reconciliation Excel workbook."""
+    """Generates the CIP reconciliation workbook from a data-free style template."""
 
     def __init__(self, recon_result: CIPReconciliationResult):
         self.result = recon_result
+
+    @staticmethod
+    def _template_column(
+        column: int,
+        open_total: int,
+        additions_start: int,
+        interface_start: int,
+        closing_start: int,
+        closing_total: int,
+    ) -> int:
+        if column <= 3:
+            return column
+        if column < open_total:
+            return 4 + min(column - 4, TEMPLATE_ACCOUNT_COUNT - 1)
+        if column == open_total:
+            return 10
+        if additions_start <= column < interface_start:
+            return 11 + min(column - additions_start, TEMPLATE_ACCOUNT_COUNT - 1)
+        if interface_start <= column < closing_start:
+            return 17 + min(column - interface_start, TEMPLATE_ACCOUNT_COUNT - 1)
+        if closing_start <= column < closing_total:
+            return 23 + min(column - closing_start, TEMPLATE_ACCOUNT_COUNT - 1)
+        return 29
+
+    @staticmethod
+    def _account_header(account: str) -> Union[int, str]:
+        try:
+            return int(account)
+        except ValueError:
+            return account
+
+    @staticmethod
+    def _numeric_project_number(project_no: str) -> Union[int, str]:
+        try:
+            return int(project_no)
+        except (TypeError, ValueError):
+            return project_no
 
     def generate(self, output_path: Union[str, Path]) -> Path:
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        wb = openpyxl.Workbook()
-        # Default sheet
-        ws = wb.active
-        ws.title = "Sheet1"
+        accounts = list(self.result.summary.get("opening", {}))
+        if not accounts:
+            raise ValueError("Cannot generate the CIP report because no account codes were reconciled.")
+        if not TEMPLATE_PATH.is_file():
+            raise FileNotFoundError(f"CIP report style template not found: {TEMPLATE_PATH}")
 
-        # Styles
-        font_header_top = Font(name="Calibri", size=11, bold=True, color="000000")
-        font_header_sub = Font(name="Calibri", size=10, bold=True, color="000000")
-        font_data = Font(name="Calibri", size=10)
-        font_total = Font(name="Calibri", size=10, bold=True)
+        wb = openpyxl.load_workbook(TEMPLATE_PATH, keep_links=False)
+        try:
+            if wb.sheetnames != ["Sheet1"]:
+                raise ValueError("CIP report template must contain only the Sheet1 reconciliation layout.")
+            ws = wb["Sheet1"]
+            original_max_column = ws.max_column
+            style_map = {
+                row: {column: copy(ws.cell(row, column)._style) for column in range(1, original_max_column + 1)}
+                for row in range(1, 5)
+            }
+            width_map = {
+                column: ws.column_dimensions[get_column_letter(column)].width
+                for column in range(1, original_max_column + 1)
+            }
+            row_heights = {row: ws.row_dimensions[row].height for row in range(1, 5)}
+            for merged_range in list(ws.merged_cells.ranges):
+                ws.unmerge_cells(str(merged_range))
 
-        fill_top_open = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-        fill_top_add = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
-        fill_top_int = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-        fill_top_bal = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-        fill_sub_hdr = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-        fill_total = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+            account_count = len(accounts)
+            if account_count < TEMPLATE_ACCOUNT_COUNT:
+                extra_columns = TEMPLATE_ACCOUNT_COUNT - account_count
+                for start in (23, 17, 11, 4):
+                    ws.delete_cols(start + account_count, extra_columns)
+            elif account_count > TEMPLATE_ACCOUNT_COUNT:
+                extra_columns = account_count - TEMPLATE_ACCOUNT_COUNT
+                for start in (29, 23, 17, 10):
+                    ws.insert_cols(start, extra_columns)
 
-        thin_side = Side(border_style="thin", color="D3D3D3")
-        thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-        double_bottom = Border(top=thin_side, bottom=Side(border_style="double", color="000000"))
+            open_start = 4
+            open_total = open_start + account_count
+            additions_start = open_total + 1
+            interface_start = additions_start + account_count
+            closing_start = interface_start + account_count
+            closing_total = closing_start + account_count
+            last_column = closing_total
 
-        align_center = Alignment(horizontal="center", vertical="center")
-        align_right = Alignment(horizontal="right", vertical="center")
-        align_left = Alignment(horizontal="left", vertical="center")
+            def source_column(column: int) -> int:
+                return self._template_column(
+                    column,
+                    open_total,
+                    additions_start,
+                    interface_start,
+                    closing_start,
+                    closing_total,
+                )
 
-        num_fmt = "#,##0.00;(#,##0.00);0.00"
+            for row in range(1, 5):
+                for column in range(1, last_column + 1):
+                    ws.cell(row, column)._style = copy(style_map[row][source_column(column)])
 
-        # Row 1: Section Headers
-        # Jun2026 (Cols 4-10 = D..J)
-        ws.merge_cells(start_row=1, start_column=4, end_row=1, end_column=10)
-        c_jun = ws.cell(1, 4, f"Jun2026")
-        c_jun.font = font_header_top
-        c_jun.alignment = align_center
-        c_jun.fill = fill_top_open
+            for key in list(ws.column_dimensions):
+                del ws.column_dimensions[key]
+            for column in range(1, last_column + 1):
+                ws.column_dimensions[get_column_letter(column)].width = width_map[source_column(column)]
+            for row in range(1, 5):
+                ws.row_dimensions[row].height = row_heights[row]
 
-        # Additions (Cols 11-16 = K..P)
-        ws.merge_cells(start_row=1, start_column=11, end_row=1, end_column=16)
-        c_add = ws.cell(1, 11, f"Additions Jul'2026")
-        c_add.font = font_header_top
-        c_add.alignment = align_center
-        c_add.fill = fill_top_add
+            current_date = datetime.strptime(self.result.period, "%b-%y")
+            opening_date = datetime.strptime(previous_period(self.result.period), "%b-%y")
+            current_heading = current_date.strftime("%b%Y")
+            opening_heading = opening_date.strftime("%b%Y")
+            ws.merge_cells(start_row=1, start_column=open_start, end_row=1, end_column=open_total)
+            ws.merge_cells(
+                start_row=1,
+                start_column=additions_start,
+                end_row=1,
+                end_column=interface_start - 1,
+            )
+            ws.merge_cells(
+                start_row=1,
+                start_column=interface_start,
+                end_row=1,
+                end_column=closing_start - 1,
+            )
+            ws.merge_cells(start_row=1, start_column=closing_start, end_row=1, end_column=closing_total)
+            ws.cell(1, open_start).value = opening_heading
+            ws.cell(1, additions_start).value = f"Additions {current_date.strftime('%b')}'{current_date.year}"
+            ws.cell(1, interface_start).value = f"Interface {current_heading}"
+            ws.cell(1, closing_start).value = f"Balance {current_heading}"
 
-        # Interface (Cols 17-22 = Q..V)
-        ws.merge_cells(start_row=1, start_column=17, end_row=1, end_column=22)
-        c_int = ws.cell(1, 17, f"Interface Jul2026")
-        c_int.font = font_header_top
-        c_int.alignment = align_center
-        c_int.fill = fill_top_int
+            ws.cell(2, 1).value = "Project No"
+            ws.cell(2, 2).value = "Project Name"
+            ws.cell(2, 3).value = "Year"
+            for index, account in enumerate(accounts):
+                ws.cell(2, open_start + index).value = self._account_header(account)
+                ws.cell(2, additions_start + index).value = self._account_header(account)
+                ws.cell(2, interface_start + index).value = self._account_header(account)
+                ws.cell(2, closing_start + index).value = self._account_header(account)
+            ws.cell(2, open_total).value = "Total"
+            ws.cell(2, closing_total).value = "Total"
 
-        # Balance (Cols 23-29 = W..AC)
-        ws.merge_cells(start_row=1, start_column=23, end_row=1, end_column=29)
-        c_bal = ws.cell(1, 23, f"Balance Jul2026")
-        c_bal.font = font_header_top
-        c_bal.alignment = align_center
-        c_bal.fill = fill_top_bal
+            missing_opening_projects = {
+                row.get("project_no")
+                for row in self.result.discrepancies
+                if row.get("type") == "Missing Opening Balance"
+            }
+            projects = [
+                project
+                for project in self.result.projects
+                if project["project_no"] not in missing_opening_projects
+            ]
+            if not projects:
+                raise ValueError(
+                    "Cannot generate the CIP report because no projects have prior-period opening balances."
+                )
+            has_unallocated_additions = bool(self.result.unallocated_additions)
+            unallocated_row = 3 + len(projects) if has_unallocated_additions else None
+            total_row = 3 + len(projects) + int(has_unallocated_additions)
+            for row in range(3, total_row + 1):
+                style_row = 4 if row == total_row else 3
+                for column in range(1, last_column + 1):
+                    ws.cell(row, column)._style = copy(style_map[style_row][source_column(column)])
+                ws.row_dimensions[row].height = row_heights[style_row]
 
-        # Row 2: Sub-headers
-        headers = [
-            "Project No", "Project Name", "Year",
-            111401, 111402, 111403, 111404, 111405, 111406, "Total",
-            111401, 111402, 111403, 111404, 111405, 111406,
-            111401, 111402, 111403, 111404, 111405, 111406,
-            111401, 111402, 111403, 111404, 111405, 111406, "Total",
-        ]
+            for index, project in enumerate(projects, start=3):
+                ws.cell(index, 1).value = self._numeric_project_number(project["project_no"])
+                ws.cell(index, 2).value = project.get("project_name", "")
+                ws.cell(index, 3).value = project.get("year")
+                for account_index, account in enumerate(accounts):
+                    ws.cell(index, open_start + account_index).value = project["opening"].get(account)
+                    ws.cell(index, additions_start + account_index).value = project["additions"].get(account)
+                    ws.cell(index, interface_start + account_index).value = project["interface"].get(account)
+                    if project["closing"].get(account) is not None:
+                        open_cell = get_column_letter(open_start + account_index)
+                        additions_cell = get_column_letter(additions_start + account_index)
+                        interface_cell = get_column_letter(interface_start + account_index)
+                        ws.cell(index, closing_start + account_index).value = (
+                            f"=+{open_cell}{index}+{additions_cell}{index}+{interface_cell}{index}"
+                        )
 
-        for col_idx, h_text in enumerate(headers, 1):
-            cell = ws.cell(2, col_idx, h_text)
-            cell.font = font_header_sub
-            cell.alignment = align_center if col_idx <= 3 else align_right
-            cell.fill = fill_sub_hdr
-            cell.border = thin_border
+            missing_opening_accounts = {
+                row.get("account")
+                for row in self.result.discrepancies
+                if row.get("type") == "Missing Opening Balance Account"
+            }
+            if unallocated_row is not None:
+                ws.cell(unallocated_row, 2).value = "Unmapped Journal Activity"
+                for account_index, account in enumerate(accounts):
+                    amount = self.result.unallocated_additions.get(account)
+                    if amount is None or account in missing_opening_accounts:
+                        continue
+                    additions_cell = get_column_letter(additions_start + account_index)
+                    open_cell = get_column_letter(open_start + account_index)
+                    interface_cell = get_column_letter(interface_start + account_index)
+                    ws.cell(unallocated_row, additions_start + account_index).value = amount
+                    ws.cell(unallocated_row, closing_start + account_index).value = (
+                        f"=+{open_cell}{unallocated_row}+{additions_cell}{unallocated_row}"
+                        f"+{interface_cell}{unallocated_row}"
+                    )
+                if not missing_opening_accounts:
+                    closing_start_letter = get_column_letter(closing_start)
+                    closing_end_letter = get_column_letter(closing_total - 1)
+                    ws.cell(unallocated_row, closing_total).value = (
+                        f"=SUM({closing_start_letter}{unallocated_row}:{closing_end_letter}{unallocated_row})"
+                    )
 
-        # Data Rows (Row 3 onwards)
-        current_row = 3
-        for p in self.result.projects:
-            # Col A: Project No
-            try:
-                p_num_val = int(p["project_no"])
-            except ValueError:
-                p_num_val = p["project_no"]
-            c_pno = ws.cell(current_row, 1, p_num_val)
-            c_pno.font = font_data
-            c_pno.alignment = align_center
-            c_pno.border = thin_border
+            for index, account in enumerate(accounts):
+                if account not in missing_opening_accounts:
+                    opening_cell = get_column_letter(open_start + index)
+                    closing_cell = get_column_letter(closing_start + index)
+                    ws.cell(total_row, open_start + index).value = (
+                        f"=SUM({opening_cell}3:{opening_cell}{total_row - 1})"
+                    )
+                    ws.cell(total_row, closing_start + index).value = (
+                        f"=SUM({closing_cell}3:{closing_cell}{total_row - 1})"
+                    )
+                for column in (
+                    additions_start + index,
+                    interface_start + index,
+                ):
+                    column_letter = get_column_letter(column)
+                    ws.cell(total_row, column).value = (
+                        f"=SUM({column_letter}3:{column_letter}{total_row - 1})"
+                    )
 
-            # Col B: Project Name
-            c_pname = ws.cell(current_row, 2, p.get("project_name", ""))
-            c_pname.font = font_data
-            c_pname.alignment = align_left
-            c_pname.border = thin_border
+            if not missing_opening_accounts:
+                open_total_letter = get_column_letter(open_total)
+                closing_total_letter = get_column_letter(closing_total)
+                ws.cell(total_row, open_total).value = (
+                    f"=SUM({open_total_letter}3:{open_total_letter}{total_row - 1})"
+                )
+                ws.cell(total_row, closing_total).value = (
+                    f"=SUM({closing_total_letter}3:{closing_total_letter}{total_row - 1})"
+                )
 
-            # Col C: Year
-            c_yr = ws.cell(current_row, 3, p.get("year", ""))
-            c_yr.font = font_data
-            c_yr.alignment = align_center
-            c_yr.border = thin_border
+            for index, project in enumerate(projects, start=3):
+                if project.get("opening_total") is not None and not missing_opening_accounts:
+                    open_start_letter = get_column_letter(open_start)
+                    open_end_letter = get_column_letter(open_total - 1)
+                    ws.cell(index, open_total).value = (
+                        f"=SUM({open_start_letter}{index}:{open_end_letter}{index})"
+                    )
+                if project.get("closing_total") is not None and not missing_opening_accounts:
+                    closing_start_letter = get_column_letter(closing_start)
+                    closing_end_letter = get_column_letter(closing_total - 1)
+                    ws.cell(index, closing_total).value = (
+                        f"=SUM({closing_start_letter}{index}:{closing_end_letter}{index})"
+                    )
 
-            # Jun2026 Opening balances (Cols 4-9 = D..I)
-            for i, acct in enumerate(ACCOUNTS):
-                val = p["opening"].get(acct, 0.0)
-                cell = ws.cell(current_row, 4 + i, val if val != 0.0 else 0)
-                cell.font = font_data
-                cell.alignment = align_right
-                cell.number_format = num_fmt
-                cell.border = thin_border
-
-            # Col 10 (J): Opening Total Formula =SUM(D3:I3)
-            c_tot_open = ws.cell(current_row, 10, f"=SUM(D{current_row}:I{current_row})")
-            c_tot_open.font = font_data
-            c_tot_open.alignment = align_right
-            c_tot_open.number_format = num_fmt
-            c_tot_open.border = thin_border
-
-            # Additions Jul'2026 (Cols 11-16 = K..P)
-            for i, acct in enumerate(ACCOUNTS):
-                val = p["additions"].get(acct, 0.0)
-                cell = ws.cell(current_row, 11 + i, val if val != 0.0 else 0)
-                cell.font = font_data
-                cell.alignment = align_right
-                cell.number_format = num_fmt
-                cell.border = thin_border
-
-            # Interface Jul2026 (Cols 17-22 = Q..V)
-            for i, acct in enumerate(ACCOUNTS):
-                val = p["interface"].get(acct, 0.0)
-                cell = ws.cell(current_row, 17 + i, val if val != 0.0 else 0)
-                cell.font = font_data
-                cell.alignment = align_right
-                cell.number_format = num_fmt
-                cell.border = thin_border
-
-            # Balance Jul2026 (Cols 23-28 = W..AB)
-            # Formula: =+D{r}+K{r}+Q{r}, =+E{r}+L{r}+R{r}, etc.
-            open_col_letters = ["D", "E", "F", "G", "H", "I"]
-            add_col_letters = ["K", "L", "M", "N", "O", "P"]
-            int_col_letters = ["Q", "R", "S", "T", "U", "V"]
-            for i in range(6):
-                o_col = open_col_letters[i]
-                a_col = add_col_letters[i]
-                u_col = int_col_letters[i]
-                formula = f"=+{o_col}{current_row}+{a_col}{current_row}+{u_col}{current_row}"
-                cell = ws.cell(current_row, 23 + i, formula)
-                cell.font = font_data
-                cell.alignment = align_right
-                cell.number_format = num_fmt
-                cell.border = thin_border
-
-            # Col 29 (AC): Closing Total Formula =SUM(W3:AB3)
-            c_tot_close = ws.cell(current_row, 29, f"=SUM(W{current_row}:AB{current_row})")
-            c_tot_close.font = font_data
-            c_tot_close.alignment = align_right
-            c_tot_close.number_format = num_fmt
-            c_tot_close.border = thin_border
-
-            current_row += 1
-
-        last_data_row = current_row - 1
-
-        # Summary / Total Row
-        if last_data_row >= 3:
-            ws.cell(current_row, 1, "Total")
-            ws.cell(current_row, 1).font = font_total
-            ws.cell(current_row, 1).alignment = align_center
-            ws.cell(current_row, 1).fill = fill_total
-            ws.cell(current_row, 1).border = double_bottom
-
-            for col_idx in range(2, 4):
-                c_empty = ws.cell(current_row, col_idx, None)
-                c_empty.fill = fill_total
-                c_empty.border = double_bottom
-
-            # Columns D to AC: =SUM({col}3:{col}{last_data_row})
-            for col_idx in range(4, 30):
-                col_letter = get_column_letter(col_idx)
-                sum_formula = f"=SUM({col_letter}3:{col_letter}{last_data_row})"
-                cell = ws.cell(current_row, col_idx, sum_formula)
-                cell.font = font_total
-                cell.alignment = align_right
-                cell.number_format = num_fmt
-                cell.fill = fill_total
-                cell.border = double_bottom
-
-        # Auto-adjust column widths
-        ws.column_dimensions["A"].width = 14
-        ws.column_dimensions["B"].width = 36
-        ws.column_dimensions["C"].width = 8
-        for c in range(4, 30):
-            ws.column_dimensions[get_column_letter(c)].width = 16
-
-        # Sheet 2: Reconciliation & GL Variance Analysis
-        ws2 = wb.create_sheet(title="Reconciliation & GL Variance")
-        ws2.views.sheetView[0].showGridLines = True
-
-        ws2.cell(1, 1, f"CIP & General Ledger Reconciliation - {self.result.period}").font = Font(
-            name="Calibri", size=14, bold=True, color="0B3041"
-        )
-
-        gl_headers = [
-            "Account", "Subledger Additions", "GL Journal Additions (DR)", "Additions Variance",
-            "Interfaced CIP Total", "GL Interface Transfer (CR)", "Interface Variance", "Reconciliation Status", "Notes"
-        ]
-        for c_idx, h in enumerate(gl_headers, 1):
-            cell = ws2.cell(3, c_idx, h)
-            cell.font = font_header_sub
-            cell.alignment = align_center
-            cell.fill = fill_sub_hdr
-            cell.border = thin_border
-
-        r_idx = 4
-        for ar in self.result.account_reconciliations:
-            ws2.cell(r_idx, 1, ar["account"]).alignment = align_center
-            ws2.cell(r_idx, 2, ar["subledger_additions"]).number_format = num_fmt
-            ws2.cell(r_idx, 3, ar["gl_additions_dr"]).number_format = num_fmt
-            ws2.cell(r_idx, 4, ar["additions_variance"]).number_format = num_fmt
-            ws2.cell(r_idx, 5, ar["interfaced_cip_total"]).number_format = num_fmt
-            ws2.cell(r_idx, 6, ar["gl_interface_cr"]).number_format = num_fmt
-            ws2.cell(r_idx, 7, ar["interface_variance"]).number_format = num_fmt
-            ws2.cell(r_idx, 8, ar["status"]).alignment = align_center
-            ws2.cell(r_idx, 9, "; ".join(ar.get("notes", []))).alignment = align_left
-
-            for c in range(1, 10):
-                ws2.cell(r_idx, c).font = font_data
-                ws2.cell(r_idx, c).border = thin_border
-            r_idx += 1
-
-        # Discrepancies table
-        r_idx += 2
-        ws2.cell(r_idx, 1, "Exception & Discrepancy Log").font = Font(
-            name="Calibri", size=12, bold=True, color="0B3041"
-        )
-        r_idx += 1
-        disc_hdrs = ["Exception Type", "Project No", "Account", "Amount", "Detail"]
-        for c_idx, h in enumerate(disc_hdrs, 1):
-            cell = ws2.cell(r_idx, c_idx, h)
-            cell.font = font_header_sub
-            cell.alignment = align_center
-            cell.fill = fill_sub_hdr
-            cell.border = thin_border
-
-        r_idx += 1
-        if not self.result.discrepancies:
-            ws2.cell(r_idx, 1, "No discrepancies identified. All accounts and projects reconciled.").font = font_data
-        else:
-            for d in self.result.discrepancies:
-                ws2.cell(r_idx, 1, d.get("type", "")).alignment = align_left
-                ws2.cell(r_idx, 2, d.get("project_no", "")).alignment = align_center
-                ws2.cell(r_idx, 3, d.get("account", "")).alignment = align_center
-                ws2.cell(r_idx, 4, d.get("amount", 0.0)).number_format = num_fmt
-                ws2.cell(r_idx, 5, d.get("detail", "")).alignment = align_left
-                for c in range(1, 6):
-                    ws2.cell(r_idx, c).font = font_data
-                    ws2.cell(r_idx, c).border = thin_border
-                r_idx += 1
-
-        # Adjust ws2 column widths
-        for c in range(1, 10):
-            ws2.column_dimensions[get_column_letter(c)].width = 22
-
-        wb.save(output_file)
-        logger.info(f"Successfully generated CIP reconciliation report at {output_file}")
+            wb._external_links = []
+            wb.calculation.fullCalcOnLoad = True
+            wb.calculation.forceFullCalc = True
+            wb.calculation.calcMode = "auto"
+            wb.save(output_file)
+        finally:
+            wb.close()
+        logger.info("Successfully generated CIP reconciliation report at %s", output_file)
         return output_file
-
