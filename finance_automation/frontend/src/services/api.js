@@ -972,14 +972,14 @@ export async function deleteRemainingInput(fileType) {
 // Use Case 4: CIP Reconciliation Report API
 // ============================================================================
 
-export async function getCipStatus(period = "Jul-26") {
+export async function getCipStatus(period) {
   const response = await fetch(`${API_BASE}/cip/status?period=${encodeURIComponent(period)}`, {
     headers: getAuthHeaders(),
   });
   return safeJsonResponse(response, "Failed to load CIP reconciliation status");
 }
 
-export async function uploadCipFile(category, file, period = "Jul-26") {
+export async function uploadCipFile(category, file, period) {
   const formData = new FormData();
   formData.append("file", file);
 
@@ -994,7 +994,7 @@ export async function uploadCipFile(category, file, period = "Jul-26") {
   return safeJsonResponse(response, `Failed to upload ${category} file`);
 }
 
-export async function deleteCipFile(category, period = "Jul-26") {
+export async function deleteCipFile(category, period) {
   const response = await fetch(
     `${API_BASE}/cip/file/${encodeURIComponent(category)}?period=${encodeURIComponent(period)}`,
     {
@@ -1005,15 +1005,7 @@ export async function deleteCipFile(category, period = "Jul-26") {
   return safeJsonResponse(response, `Failed to delete ${category} file`);
 }
 
-export async function loadCipSampleData(period = "Jul-26") {
-  const response = await fetch(`${API_BASE}/cip/load-sample?period=${encodeURIComponent(period)}`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-  });
-  return safeJsonResponse(response, "Failed to load CIP sample dataset");
-}
-
-export async function runCipReconciliation(period = "Jul-26") {
+export async function runCipReconciliation(period) {
   const response = await fetch(`${API_BASE}/cip/reconcile?period=${encodeURIComponent(period)}`, {
     method: "POST",
     headers: getAuthHeaders(),
@@ -1021,7 +1013,7 @@ export async function runCipReconciliation(period = "Jul-26") {
   return safeJsonResponse(response, "Failed to execute CIP reconciliation");
 }
 
-export async function generateCipReport(period = "Jul-26") {
+export async function generateCipReport(period) {
   const response = await fetch(`${API_BASE}/cip/generate-report?period=${encodeURIComponent(period)}`, {
     method: "POST",
     headers: getAuthHeaders(),
@@ -1029,7 +1021,7 @@ export async function generateCipReport(period = "Jul-26") {
   return safeJsonResponse(response, "Failed to generate CIP reconciliation report");
 }
 
-export async function downloadCipReport(filename = null, period = "Jul-26") {
+export async function downloadCipReport(filename = null, period) {
   const query = filename ? `filename=${encodeURIComponent(filename)}` : `period=${encodeURIComponent(period)}`;
   const response = await fetch(`${API_BASE}/cip/download?${query}`, {
     headers: getAuthHeaders(),
@@ -1043,6 +1035,26 @@ export async function downloadCipReport(filename = null, period = "Jul-26") {
   const a = document.createElement("a");
   a.href = downloadUrl;
   a.download = filename || `CIP_Reconciliation_Report_${period}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function downloadCipJournalReview(filename = null, period) {
+  const query = filename ? `filename=${encodeURIComponent(filename)}` : `period=${encodeURIComponent(period)}`;
+  const response = await fetch(`${API_BASE}/cip/download-journal-review?${query}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await readApiError(response, "Failed to download CIP journal review");
+    throw new Error(errorText);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = filename || `CIP_Journal_Details_Review_${period}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1221,7 +1233,7 @@ export async function resetAccrualEntryData(period = "Sep-26") {
   return safeJsonResponse(response, "Failed to reset Accrual Entry data");
 }
 
-export async function resetCipData(period = "Jul-26") {
+export async function resetCipData(period) {
   const response = await fetch(
     `${API_BASE}/cip/reset?period=${encodeURIComponent(period)}`,
     {

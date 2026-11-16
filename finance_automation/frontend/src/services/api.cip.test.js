@@ -1,0 +1,45 @@
+import { downloadCipJournalReview } from "./api";
+
+describe("CIP journal review download", () => {
+  const originalFetch = global.fetch;
+  const originalCreateObjectURL = window.URL.createObjectURL;
+  const originalRevokeObjectURL = window.URL.revokeObjectURL;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    if (originalCreateObjectURL) {
+      window.URL.createObjectURL = originalCreateObjectURL;
+    } else {
+      delete window.URL.createObjectURL;
+    }
+    if (originalRevokeObjectURL) {
+      window.URL.revokeObjectURL = originalRevokeObjectURL;
+    } else {
+      delete window.URL.revokeObjectURL;
+    }
+    localStorage.clear();
+    jest.restoreAllMocks();
+  });
+
+  it("downloads the generated review using its period-specific filename", async () => {
+    const filename = "CIP_Journal_Details_Review_Jul_26.xlsx";
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      blob: jest.fn().mockResolvedValue(new Blob(["review"])),
+    });
+    window.URL.createObjectURL = jest.fn().mockReturnValue("blob:cip-review");
+    window.URL.revokeObjectURL = jest.fn();
+    jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      expect(this.download).toBe(filename);
+    });
+
+    await downloadCipJournalReview(filename, "Jul-26");
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/cip/download-journal-review?filename=${encodeURIComponent(filename)}`,
+      { headers: {} }
+    );
+    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);
+    expect(window.URL.revokeObjectURL).toHaveBeenCalledWith("blob:cip-review");
+  });
+});
