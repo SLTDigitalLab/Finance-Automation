@@ -765,6 +765,35 @@ export async function updateUseCaseAssignment(email, useCases) {
 }
 
 // Finance Board Pack
+export async function inspectBoardPackFiles(files) {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append("files", f);
+  }
+
+  const response = await fetch(`${API_BASE}/board-pack/inspect-files`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to inspect uploaded files");
+}
+
+export async function generateUnifiedBoardPack(files, sections) {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append("files", f);
+  }
+  formData.append("sections", JSON.stringify(sections));
+
+  const response = await fetch(`${API_BASE}/board-pack/generate-unified`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  return safeJsonResponse(response, "Failed to generate board pack");
+}
+
 export async function generateBoardPack(file) {
   const formData = new FormData();
   formData.append("file", file);
