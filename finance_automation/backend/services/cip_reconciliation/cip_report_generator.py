@@ -5,11 +5,17 @@ Generates the single-sheet CIP rollforward in the supplied report layout.
 from copy import copy
 from datetime import datetime
 import logging
+import os
 from pathlib import Path
-from typing import Union
+import re
+import tempfile
+from typing import Dict, List, Tuple, Union
+import zipfile
 
 import openpyxl
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
+from openpyxl.worksheet.worksheet import Worksheet
 
 from .cip_reader import previous_period
 from .cip_reconciliation_engine import CIPReconciliationResult
@@ -18,6 +24,128 @@ logger = logging.getLogger(__name__)
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "cip_report_template.xlsx"
 TEMPLATE_ACCOUNT_COUNT = 6
+
+_SUM_FORMULA = re.compile(r"^=SUM\(([A-Z]{1,3}\d+):([A-Z]{1,3}\d+)\)$")
+_ADD_FORMULA = re.compile(r"^=\+?([A-Z]{1,3}\d+(?:\+[A-Z]{1,3}\d+)*)$")
+_CELL_XML = re.compile(rb'<c\b([^>]*)>(.*?)</c>', re.DOTALL)
+_CELL_REFERENCE_XML = re.compile(rb'(?:^|\s)r="([^"]+)"')
+_FORMULA_XML = re.compile(rb"<f(?:\s[^>]*)?(?:>.*?</f>|/>)", re.DOTALL)
+_VALUE_XML = re.compile(rb"<v(?:\s[^>]*)?>.*?</v>|<v\s*/>", re.DOTALL)
+
+
+def _calculate_formula_values(worksheet: Worksheet) -> Dict[str, Union[int, float]]:
+    """Calculate report formulas for viewers that do not recalculate workbooks."""
+    pending = {
+        cell.coordinate: cell.value
+        for row in worksheet.iter_rows()
+        for cell in row
+        if cell.data_type == "f"
+    }
+    calculated: Dict[str, Union[int, float]] = {}
+
+    while pending:
+        resolved: List[Tuple[str, Union[int, float]]] = []
+        for coordinate, formula in pending.items():
+            sum_match = _SUM_FORMULA.fullmatch(formula)
+            add_match = _ADD_FORMULA.fullmatch(formula)
+            if sum_match:
+                min_col, min_row, max_col, max_row = range_boundaries(
+                    f"{sum_match.group(1)}:{sum_match.group(2)}"
+                )
+                references = [
+                    worksheet.cell(row, column).coordinate
+                    for row in range(min_row, max_row + 1)
+                    for column in range(min_col, max_col + 1)
+                ]
+                ignore_text = True
+            elif add_match:
+                references = add_match.group(1).split("+")
+                ignore_text = False
+            else:
+                raise ValueError(f"Unsupported CIP report formula in {coordinate}: {formula}")
+
+            if any(reference in pending for reference in references):
+                continue
+
+            values = []
+            for reference in references:
+                value = calculated.get(reference, worksheet[reference].value)
+                if value is None:
+                    values.append(0)
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    values.append(value)
+                elif ignore_text:
+                    continue
+                else:
+                    raise ValueError(
+                        f"CIP report formula in {coordinate} references non-numeric cell {reference}."
+                    )
+
+            value = sum(values)
+            if isinstance(value, float):
+                value = float(format(value, ".15g"))
+            resolved.append((coordinate, value))
+
+        if not resolved:
+            raise ValueError("Unable to calculate cached values for CIP report formulas.")
+
+        for coordinate, value in resolved:
+            calculated[coordinate] = value
+            del pending[coordinate]
+
+    return calculated
+
+
+def _add_formula_cache(output_file: Path, values: Dict[str, Union[int, float]]) -> None:
+    """Store calculated formula values alongside formulas in the workbook package."""
+    if not values:
+        return
+
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f".{output_file.name}.",
+        suffix=".tmp",
+        dir=output_file.parent,
+    )
+    os.close(descriptor)
+    cached_cells = set()
+    try:
+        with zipfile.ZipFile(output_file, "r") as source, zipfile.ZipFile(temporary_path, "w") as target:
+            for member in source.infolist():
+                contents = source.read(member.filename)
+                if member.filename == "xl/worksheets/sheet1.xml":
+                    def cache_cell(match):
+                        attributes, body = match.groups()
+                        reference_match = _CELL_REFERENCE_XML.search(attributes)
+                        if not reference_match:
+                            return match.group(0)
+                        reference = reference_match.group(1).decode("ascii")
+                        if reference not in values:
+                            return match.group(0)
+                        if not _FORMULA_XML.search(body):
+                            raise ValueError(f"Expected a formula in CIP report cell {reference}.")
+                        cached_value = format(values[reference], ".15g").encode("ascii")
+                        updated_body, count = _VALUE_XML.subn(
+                            lambda _: b"<v>" + cached_value + b"</v>",
+                            body,
+                            count=1,
+                        )
+                        if count != 1:
+                            raise ValueError(f"Missing cached-value element in CIP report cell {reference}.")
+                        cached_cells.add(reference)
+                        return b"<c" + attributes + b">" + updated_body + b"</c>"
+
+                    contents = _CELL_XML.sub(cache_cell, contents)
+                target.writestr(member, contents)
+
+        missing_cells = set(values) - cached_cells
+        if missing_cells:
+            raise ValueError(
+                f"Unable to write cached values for CIP report cells: {', '.join(sorted(missing_cells))}"
+            )
+        os.replace(temporary_path, output_file)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 
 class CIPReportGenerator:
@@ -276,8 +404,10 @@ class CIPReportGenerator:
             wb.calculation.fullCalcOnLoad = True
             wb.calculation.forceFullCalc = True
             wb.calculation.calcMode = "auto"
+            formula_values = _calculate_formula_values(ws)
             wb.save(output_file)
         finally:
             wb.close()
+        _add_formula_cache(output_file, formula_values)
         logger.info("Successfully generated CIP reconciliation report at %s", output_file)
         return output_file

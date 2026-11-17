@@ -253,6 +253,16 @@ def test_report_uses_dynamic_accounts_and_original_single_sheet_layout(tmp_path)
     finally:
         workbook.close()
 
+    cached_workbook = openpyxl.load_workbook(report_path, data_only=True, keep_links=False)
+    try:
+        worksheet = cached_workbook["Sheet1"]
+        assert worksheet["E3"].value == 1
+        assert worksheet["H3"].value == 8
+        assert worksheet["I3"].value == 8
+        assert worksheet["H4"].value == 8
+    finally:
+        cached_workbook.close()
+
     next_opening = CIPReader.read_opening_balances(report_path, expected_period="Mar-26")
     assert next_opening["123456"][account] == 8
     account_result = result.account_reconciliations[0]
