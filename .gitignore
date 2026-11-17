@@ -14,6 +14,7 @@ finance_automation/frontend/node_modules/
 finance_automation/frontend/build/
 *.pptx
 *.xlsx
+!finance_automation/backend/services/cip_reconciliation/templates/cip_report_template.xlsx
 *.log
 .DS_Store
 Thumbs.db
