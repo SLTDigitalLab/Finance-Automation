@@ -1,12 +1,14 @@
 """Finance Board Pack API Routes"""
 import errno
+import json
 import logging
 import os
 import re
 import tempfile
 from pathlib import Path
+from typing import List, Optional, Tuple, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -19,6 +21,7 @@ from config import settings
 from services.board_pack_generator import generate_board_pack
 from services.board_pack_history import load_snapshot, save_snapshot
 from services.board_pack_reader import BoardPackError, read_board_pack_workbook
+from services.board_pack_unified_service import generate_unified_pack, inspect_files
 
 logger = logging.getLogger(__name__)
 board_pack_router = APIRouter(prefix="/api/board-pack", tags=["board-pack"])
@@ -33,8 +36,11 @@ _DEFAULT_OUTPUT_DIR = _APP_DATA_DIR / "FinanceAutomation" / "outputs" / "board_p
 OUTPUT_DIR = Path(os.environ.get("FINANCE_BOARD_PACK_OUTPUT_DIR", _DEFAULT_OUTPUT_DIR))
 LEGACY_OUTPUT_DIR = settings.OUTPUT_DIR / "board_pack"
 HISTORY_DIR = OUTPUT_DIR / "history"
-FILENAME_PATTERN = re.compile(r"^Finance_Board_Pack_[A-Za-z]+_\d{4}_[0-9a-f]{8}\.pptx$")
+FILENAME_PATTERN = re.compile(
+    r"^(?:Finance_Board_Pack|Mobitel_Performance|Telecom_Services_Performance)_[A-Za-z0-9_]+_\d{4}_[0-9a-f]{8}\.pptx$"
+)
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
+UNIFIED_ALLOWED_EXTENSIONS = {".xlsx", ".xlsm", ".pptx"}
 
 
 def _build(file_path: Path, user_output_dir: Path):
@@ -149,6 +155,134 @@ async def generate_board_pack_report(
         "slide_count": 9,
         "warnings": data.warnings,
     }
+
+
+def _stage_multiple_uploads(files: List[UploadFile]) -> List[Tuple[str, Path]]:
+    staged: List[Tuple[str, Path]] = []
+    for f in files:
+        orig_name = f.filename or "upload"
+        ext = Path(orig_name).suffix.lower()
+        if ext not in UNIFIED_ALLOWED_EXTENSIONS:
+            # Clean up already staged
+            for _, p in staged:
+                p.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{orig_name}' has an unsupported extension. Use .xlsx, .xlsm, or .pptx.",
+            )
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", suffix=ext, prefix="bp_unified_", delete=False) as tf:
+                t_path = Path(tf.name)
+                total_bytes = 0
+                while True:
+                    chunk = f.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"File '{orig_name}' exceeds {settings.MAX_FILE_SIZE_MB} MB.",
+                        )
+                    tf.write(chunk)
+                if total_bytes == 0:
+                    raise HTTPException(status_code=400, detail=f"The uploaded file '{orig_name}' is empty.")
+                staged.append((orig_name, t_path))
+        except Exception:
+            for _, p in staged:
+                p.unlink(missing_ok=True)
+            raise
+    return staged
+
+
+@board_pack_router.post("/inspect-files")
+async def inspect_board_pack_files(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(require_use_case("board_pack")),
+):
+    """Inspects uploaded files by structure without relying on filenames."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded.")
+
+    try:
+        staged = await run_in_threadpool(_stage_multiple_uploads, files)
+    except OSError as exc:
+        raise _storage_error(exc) from exc
+
+    try:
+        inspected = await run_in_threadpool(inspect_files, staged)
+        return {"status": "success", "files": inspected}
+    finally:
+        for _, p in staged:
+            p.unlink(missing_ok=True)
+
+
+@board_pack_router.post("/generate-unified")
+async def generate_unified_board_pack(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    sections: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case("board_pack")),
+):
+    """
+    Unified endpoint that generates selected Board Pack sections:
+      - board_pack (9 slides)
+      - ratio_report (2 slides)
+      - mobitel (10 slides)
+      - telecom_services (9 slides)
+    Combines them into a single downloadable PPTX in exact order.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded.")
+
+    try:
+        selected_sections = json.loads(sections) if sections.startswith("[") else [s.strip() for s in sections.split(",")]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid sections format. Expected JSON array or comma-separated list.")
+
+    if not selected_sections:
+        raise HTTPException(status_code=400, detail="Please select at least one section to generate.")
+
+    try:
+        staged = await run_in_threadpool(_stage_multiple_uploads, files)
+    except OSError as exc:
+        raise _storage_error(exc) from exc
+
+    user_out_dir = OUTPUT_DIR / str(current_user.id)
+    user_out_dir.mkdir(parents=True, exist_ok=True)
+    legacy_hist = LEGACY_OUTPUT_DIR / str(current_user.id) / "history"
+
+    try:
+        result = await run_in_threadpool(
+            generate_unified_pack,
+            staged,
+            selected_sections,
+            user_out_dir,
+            legacy_hist,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BoardPackError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(f"Unified board pack generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Generation failed: {exc}") from exc
+    finally:
+        for _, p in staged:
+            p.unlink(missing_ok=True)
+
+    log_audit(
+        db=db,
+        action="Report Generation",
+        module="Finance Board Pack",
+        description=f"Generated Unified Board Pack ({', '.join(result['sections_generated'])}) for {result['period']}",
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        request=request,
+    )
+
+    return result
 
 
 @board_pack_router.get("/download/{filename}")
