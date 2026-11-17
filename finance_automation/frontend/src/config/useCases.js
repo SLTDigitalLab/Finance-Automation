@@ -17,7 +17,7 @@ import {
 } from "@mui/icons-material";
 
 /**
- * The 14 finance automation use cases shown on the launcher (/home).
+ * The 15 finance automation use cases shown on the launcher (/home).
  *
  * - `path`: where the icon navigates. `null` = not built yet ("Coming soon").
  * - `paths`: every route that belongs to the use case (used to guard direct URL access).
@@ -91,6 +91,16 @@ export const USE_CASES = [
     icon: AccountBalanceWalletIcon,
     color: "#059669",
     path: "https://pettycash.sltdigitallab.lk/login",
+    external: true,
+    paths: [],
+  },
+  {
+    id: "use_case_14",
+    name: "VisionFlow AI",
+    description: "VisionFlow AI portal",
+    icon: AppsIcon,
+    color: "#2563EB",
+    path: "https://visionflowai.raccoon-ai.io/",
     external: true,
     paths: [],
   },
