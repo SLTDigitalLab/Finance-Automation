@@ -1038,7 +1038,7 @@ export async function downloadCipReport(filename = null, period) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  window.setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+  window.URL.revokeObjectURL(downloadUrl);
 }
 
 export async function downloadCipJournalReview(filename = null, period) {
@@ -1058,7 +1058,7 @@ export async function downloadCipJournalReview(filename = null, period) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  window.setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+  window.URL.revokeObjectURL(downloadUrl);
 }
 
 // ============================================================================
