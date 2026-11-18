@@ -8,6 +8,8 @@ import {
   LinearProgress,
   Paper,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import {
   AccountBalance as AccountBalanceIcon,
@@ -35,10 +37,14 @@ import { visibleNavItems } from "../config/useCases";
 import {
   deleteDebtorAgeFile,
   downloadDebtorAgeReport,
+  downloadCreditorAgingReport,
+  generateCreditorAgingReport,
   generateDebtorAgeReport,
   getDebtorAgeStatus,
   resetDebtorAgeData,
   uploadDebtorAgingFile,
+  uploadCreditorNettingFile,
+  uploadErpDebtorAgingFile,
   uploadNettingReportFile,
 } from "../services/api";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
@@ -55,7 +61,7 @@ const NAV_ITEMS = [
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
-const INPUTS = [
+const DEBTOR_INPUTS = [
   {
     key: "debtor_aging",
     fileKey: "debtor-aging",
@@ -67,6 +73,21 @@ const INPUTS = [
     fileKey: "netting-report",
     title: "SLT AR/AP Netting Report Workbook",
     description: "Transaction-level AR/AP details for international operators with transaction numbers and dates.",
+  },
+];
+
+const CREDITOR_INPUTS = [
+  {
+    key: "creditor_netting",
+    fileKey: "creditor-netting",
+    title: "SLT AR/AP Netting Report – Creditor",
+    description: "Payable transactions with supplier names, due dates, currencies and Entered Due Remaining in column Q.",
+  },
+  {
+    key: "erp_debtor_aging",
+    fileKey: "erp-debtor-aging",
+    title: "SLT Debtor Age Analysis ERP Report",
+    description: "Customer outstanding amounts and ERP aging buckets, including the report date and currency.",
   },
 ];
 
@@ -175,6 +196,7 @@ export default function DebtorAgeAnalysis() {
   const { user, logout } = useAuth();
 
   const [status, setStatus] = useState(null);
+  const [reportMode, setReportMode] = useState("debtor");
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [busyKey, setBusyKey] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -209,9 +231,15 @@ export default function DebtorAgeAnalysis() {
       if (fileKey === "debtor-aging") {
         await uploadDebtorAgingFile(file);
         setSuccessMessage("Debtor Aging file uploaded and validated successfully.");
-      } else {
+      } else if (fileKey === "netting-report") {
         await uploadNettingReportFile(file);
         setSuccessMessage("AR/AP Netting Report uploaded and validated successfully.");
+      } else if (fileKey === "creditor-netting") {
+        await uploadCreditorNettingFile(file);
+        setSuccessMessage("Creditor Netting Report uploaded and validated successfully.");
+      } else {
+        await uploadErpDebtorAgingFile(file);
+        setSuccessMessage("Debtor ERP Aging Report uploaded and validated successfully.");
       }
       await loadStatus();
     } catch (err) {
@@ -242,27 +270,44 @@ export default function DebtorAgeAnalysis() {
 
     const t1 = setTimeout(() => {
       setProgress(40);
-      setGenerationStage("Matching counterparty transactions and invoice numbers...");
+      setGenerationStage(
+        reportMode === "debtor"
+          ? "Matching counterparty transactions and invoice numbers..."
+          : "Matching suppliers and calculating signed creditor balances..."
+      );
     }, 350);
 
     const t2 = setTimeout(() => {
       setProgress(70);
-      setGenerationStage("Calculating days past due and aging buckets (0-30, 31-60, ... 1096+)...");
+      setGenerationStage(
+        reportMode === "debtor"
+          ? "Calculating days past due and aging buckets (0-30, 31-60, ... 1096+)..."
+          : "Calculating creditor and supplier-wise net aging buckets..."
+      );
     }, 700);
 
     const t3 = setTimeout(() => {
       setProgress(90);
-      setGenerationStage("Preserving customer account codes, computing subtotals, and finalizing report...");
+      setGenerationStage(
+        reportMode === "debtor"
+          ? "Preserving customer account codes, computing subtotals, and finalizing report..."
+          : "Reconciling debtor, creditor and supplier totals..."
+      );
     }, 1100);
 
     try {
-      const result = await generateDebtorAgeReport();
+      const result = reportMode === "debtor"
+        ? await generateDebtorAgeReport()
+        : await generateCreditorAgingReport();
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
       setProgress(100);
-      setGenerationStage("Debtor Age Analysis Report generated successfully!");
-      setSuccessMessage(result.message || "Debtor Age Analysis Report generated successfully.");
+      const reportName = reportMode === "debtor"
+        ? "Debtor Age Analysis Report"
+        : "Creditor Aging and Supplier-wise Net Balance Report";
+      setGenerationStage(`${reportName} generated successfully!`);
+      setSuccessMessage(result.message || `${reportName} generated successfully.`);
       await loadStatus();
     } catch (err) {
       clearTimeout(t1);
@@ -270,7 +315,7 @@ export default function DebtorAgeAnalysis() {
       clearTimeout(t3);
       setProgress(0);
       setGenerationStage("");
-      setErrorMessage(err.message || "Unable to generate Debtor Age Analysis Report.");
+      setErrorMessage(err.message || "Unable to generate the selected aging report.");
     } finally {
       setGenerating(false);
     }
@@ -280,8 +325,13 @@ export default function DebtorAgeAnalysis() {
     setErrorMessage("");
     setDownloading(true);
     try {
-      await downloadDebtorAgeReport();
-      setSuccessMessage("SLT_Debtor_Age_Analysis_Report.xlsx downloaded successfully.");
+      if (reportMode === "debtor") {
+        await downloadDebtorAgeReport();
+        setSuccessMessage("SLT_Debtor_Age_Analysis_Report.xlsx downloaded successfully.");
+      } else {
+        await downloadCreditorAgingReport();
+        setSuccessMessage("Creditor_Aging_Supplier_Net_Balance_Report.xlsx downloaded successfully.");
+      }
     } catch (err) {
       setErrorMessage(err.message || "Unable to download report.");
     } finally {
@@ -311,8 +361,17 @@ export default function DebtorAgeAnalysis() {
     navigate("/login");
   };
 
-  const allReady = !!(status?.debtor_aging?.uploaded && status?.netting_report?.uploaded);
-  const reportReady = !!status?.report_ready;
+  const isDebtorReport = reportMode === "debtor";
+  const selectedInputs = isDebtorReport ? DEBTOR_INPUTS : CREDITOR_INPUTS;
+  const allReady = isDebtorReport
+    ? !!(status?.debtor_aging?.uploaded && status?.netting_report?.uploaded)
+    : !!(status?.creditor_netting?.uploaded && status?.erp_debtor_aging?.uploaded);
+  const reportReady = isDebtorReport
+    ? !!status?.report_ready
+    : !!status?.creditor_report_ready;
+  const reportTitle = isDebtorReport
+    ? "Debtor Age Analysis Report"
+    : "Creditor Aging and Supplier-wise Net Balance Report";
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#edf4fb_0%,#f8fafc_46%,#eef3f8_100%)] font-sans text-slate-900">
@@ -367,9 +426,11 @@ export default function DebtorAgeAnalysis() {
             <div className="flex items-center justify-between gap-4">
               <img src={lightLogo} alt="SLT Mobitel Logo" className="h-9 object-contain lg:hidden" />
               <div className="flex-1 text-center">
-                <h1 className="truncate text-lg font-black text-[#082f49] md:text-2xl">Debtor Age Analysis Report</h1>
+                <h1 className="truncate text-lg font-black text-[#082f49] md:text-2xl">{reportTitle}</h1>
                 <p className="hidden text-sm font-bold text-slate-500 sm:block">
-                  Monthly Debtor Age Analysis from AR/AP netting and debtor aging workbooks
+                  {isDebtorReport
+                    ? "Monthly Debtor Age Analysis from AR/AP netting and debtor aging workbooks"
+                    : "Creditor Aging and supplier-wise net balance from creditor netting and ERP debtor aging workbooks"}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -412,12 +473,34 @@ export default function DebtorAgeAnalysis() {
             <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-black text-[#082f49]">Required Source Workbooks</h2>
+                  <h2 className="text-lg font-black text-[#082f49]">Report Option</h2>
                   <p className="mt-1 text-sm font-medium text-slate-500">
-                    Upload both input Excel workbooks to compute the invoice-level debtor aging analysis.
+                    Choose a report, then upload its two source Excel workbooks.
                   </p>
                 </div>
               </div>
+              <ToggleButtonGroup
+                exclusive
+                disabled={generating || resetting || !!busyKey}
+                value={reportMode}
+                onChange={(_, value) => {
+                  if (value) {
+                    setReportMode(value);
+                    setProgress(0);
+                    setGenerationStage("");
+                    setErrorMessage("");
+                    setSuccessMessage("");
+                  }
+                }}
+                aria-label="Aging report option"
+                sx={{
+                  "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 800, px: 2 },
+                  "& .Mui-selected": { color: "#0B3041 !important", backgroundColor: "#eaf2f8 !important" },
+                }}
+              >
+                <ToggleButton value="debtor">Debtor Age Analysis</ToggleButton>
+                <ToggleButton value="creditor">Creditor Aging &amp; Net Balance</ToggleButton>
+              </ToggleButtonGroup>
             </Paper>
 
             {/* File Upload Cards */}
@@ -425,7 +508,7 @@ export default function DebtorAgeAnalysis() {
               <div className="flex justify-center py-12"><CircularProgress /></div>
             ) : (
               <div className="space-y-4">
-                {INPUTS.map((input) => (
+                {selectedInputs.map((input) => (
                   <InputCard
                     key={input.key}
                     input={input}
@@ -445,7 +528,9 @@ export default function DebtorAgeAnalysis() {
                   <div>
                     <h2 className="text-lg font-black text-[#082f49]">Generate Report</h2>
                     <p className="mt-1 text-sm font-medium text-slate-500">
-                      Calculates invoice-level age analysis in LKR across all 9 aging buckets, preserving the official Oracle AR format.
+                      {isDebtorReport
+                        ? "Calculates invoice-level age analysis using the uploaded ERP report and preserves its existing output format."
+                        : "Combines debtor ERP aging with signed payable balances; the workbook includes creditor detail, supplier-wise net aging and reconciliation."}
                     </p>
                   </div>
 
@@ -526,7 +611,10 @@ export default function DebtorAgeAnalysis() {
                     {reportReady && (
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70">
                         <p className="text-sm font-bold text-slate-700">
-                          File: {status?.report_filename || "SLT_Debtor_Age_Analysis_Report.xlsx"} &middot; Natural Account 122105 (Voice Debtors)
+                          File: {isDebtorReport
+                            ? (status?.report_filename || "SLT_Debtor_Age_Analysis_Report.xlsx")
+                            : (status?.creditor_report_filename || "Creditor_Aging_Supplier_Net_Balance_Report.xlsx")}
+                          {isDebtorReport && <> &middot; Natural Account 122105 (Voice Debtors)</>}
                         </p>
                         <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
                           <CheckCircleIcon fontSize="inherit" /> Ready to Download
@@ -542,9 +630,15 @@ export default function DebtorAgeAnalysis() {
             <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
               <h3 className="text-base font-extrabold text-[#082f49] mb-2">Report Specifications</h3>
               <p className="text-sm text-slate-600 leading-relaxed">
-                The <strong>SLT Debtor Age Analysis Report</strong> (<code>SLT_Debtor_Age_Analysis_Report.xlsx</code>) is an invoice-level
-                aging report covering all outstanding international Voice Receivables (Natural Account <strong>122105</strong>).
-                Aging buckets are computed from invoice Due Dates against the report As-on-Date:
+                {isDebtorReport ? (
+                  <>
+                    The <strong>SLT Debtor Age Analysis Report</strong> is an invoice-level aging report covering outstanding international Voice Receivables. Aging buckets are computed from invoice due dates against the report as-on date:
+                  </>
+                ) : (
+                  <>
+                    The <strong>Creditor Aging and Supplier-wise Net Balance Report</strong> uses the debtor ERP report date and currency. Signed payable amounts are converted with <code>Creditor Balance = -Entered Due Remaining</code>; supplier matches and review suggestions appear in the Reconciliation sheet.
+                  </>
+                )}
               </p>
               <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs font-semibold text-slate-700">
                 <span className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">&bull; Current (not overdue)</span>
