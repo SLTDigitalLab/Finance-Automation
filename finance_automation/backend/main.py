@@ -20,6 +20,7 @@ from app.routes.cip_routes import cip_router
 from app.routes.accrual_entry_routes import accrual_entry_router
 from app.routes.use_case_routes import use_case_router
 from app.routes.debtor_age_analysis_routes import debtor_age_router
+from app.routes.budget_actual_routes import router as budget_actual_router
 from utils.logger import logger
 
 app = FastAPI(
@@ -50,6 +51,7 @@ app.include_router(cip_router)
 app.include_router(accrual_entry_router)
 app.include_router(use_case_router)
 app.include_router(debtor_age_router)
+app.include_router(budget_actual_router)
 
 
 @app.on_event("startup")
