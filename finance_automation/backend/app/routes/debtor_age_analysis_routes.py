@@ -23,6 +23,12 @@ from services.debtor_age_analysis_service import (
     validate_debtor_aging_file,
     validate_netting_report_file,
 )
+from services.supplier_net_aging_service import (
+    CreditorAgingError,
+    generate_creditor_aging_report,
+    validate_creditor_netting_file,
+    validate_erp_debtor_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,7 @@ OUTPUT_DIR = settings.OUTPUT_DIR / "debtor_age_analysis"
 ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
 
 OUTPUT_FILENAME = "SLT_Debtor_Age_Analysis_Report.xlsx"
+SUPPLIER_NET_OUTPUT_FILENAME = "Creditor_Aging_Supplier_Net_Balance_Report.xlsx"
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -88,6 +95,9 @@ async def get_debtor_age_status(
     debtor_path  = upload_dir / "debtor_aging.xlsx"
     netting_path = upload_dir / "netting_report.xlsx"
     output_path  = output_dir / OUTPUT_FILENAME
+    creditor_netting_path = upload_dir / "creditor_netting.xlsx"
+    erp_debtor_path = upload_dir / "erp_debtor_aging.xlsx"
+    supplier_net_output_path = output_dir / SUPPLIER_NET_OUTPUT_FILENAME
 
     return {
         "debtor_aging": {
@@ -102,6 +112,20 @@ async def get_debtor_age_status(
         },
         "report_ready": output_path.exists(),
         "report_filename": OUTPUT_FILENAME if output_path.exists() else None,
+        "creditor_netting": {
+            "uploaded": creditor_netting_path.exists(),
+            "filename": creditor_netting_path.name if creditor_netting_path.exists() else None,
+            "size": creditor_netting_path.stat().st_size if creditor_netting_path.exists() else None,
+        },
+        "erp_debtor_aging": {
+            "uploaded": erp_debtor_path.exists(),
+            "filename": erp_debtor_path.name if erp_debtor_path.exists() else None,
+            "size": erp_debtor_path.stat().st_size if erp_debtor_path.exists() else None,
+        },
+        "creditor_report_ready": supplier_net_output_path.exists(),
+        "creditor_report_filename": (
+            SUPPLIER_NET_OUTPUT_FILENAME if supplier_net_output_path.exists() else None
+        ),
     }
 
 
@@ -191,6 +215,87 @@ async def upload_netting_report(
     }
 
 
+@debtor_age_router.post("/upload/creditor-netting")
+async def upload_creditor_netting(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Upload a payable netting report identified by its Excel headers."""
+    _check_ext(file.filename or "")
+    content = await file.read()
+    _check_size(content)
+
+    upload_dir = _user_upload_dir(current_user.id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / "creditor_netting.xlsx"
+    dest.write_bytes(content)
+    try:
+        info = validate_creditor_netting_file(dest)
+    except CreditorAgingError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        action="Upload",
+        module=MODULE,
+        description=f"Uploaded creditor netting file: {file.filename}",
+        request=request,
+    )
+    return {
+        "message": "Creditor netting file uploaded and validated successfully.",
+        "original_filename": file.filename,
+        "payables_rows": info["payables_rows"],
+        "currencies": info["currencies"],
+        "file_size": len(content),
+    }
+
+
+@debtor_age_router.post("/upload/erp-debtor-aging")
+async def upload_erp_debtor_aging(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Upload a debtor ERP aging report identified by its Excel headers."""
+    _check_ext(file.filename or "")
+    content = await file.read()
+    _check_size(content)
+
+    upload_dir = _user_upload_dir(current_user.id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / "erp_debtor_aging.xlsx"
+    dest.write_bytes(content)
+    try:
+        info = validate_erp_debtor_file(dest)
+    except CreditorAgingError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        action="Upload",
+        module=MODULE,
+        description=f"Uploaded debtor ERP aging file: {file.filename}",
+        request=request,
+    )
+    return {
+        "message": "Debtor ERP aging file uploaded and validated successfully.",
+        "original_filename": file.filename,
+        "report_date": info["report_date"].isoformat(),
+        "currency": info["currency"],
+        "transaction_rows": info["transaction_rows"],
+        "file_size": len(content),
+    }
+
+
 @debtor_age_router.delete("/upload/{file_key}")
 async def delete_uploaded_file(
     file_key: str,
@@ -200,6 +305,8 @@ async def delete_uploaded_file(
     key_map = {
         "debtor-aging":   "debtor_aging.xlsx",
         "netting-report": "netting_report.xlsx",
+        "creditor-netting": "creditor_netting.xlsx",
+        "erp-debtor-aging": "erp_debtor_aging.xlsx",
     }
     if file_key not in key_map:
         raise HTTPException(status_code=400, detail=f"Unknown file key: {file_key!r}")
@@ -287,6 +394,75 @@ async def download_report(
     return FileResponse(
         path=str(output_path),
         filename=OUTPUT_FILENAME,
+        media_type=EXCEL_MEDIA_TYPE,
+    )
+
+
+@debtor_age_router.post("/generate/creditor-aging")
+async def generate_creditor_report(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Generate the creditor aging and supplier net balance workbook."""
+    upload_dir = _user_upload_dir(current_user.id)
+    creditor_netting_path = upload_dir / "creditor_netting.xlsx"
+    erp_debtor_path = upload_dir / "erp_debtor_aging.xlsx"
+    if not creditor_netting_path.exists():
+        raise HTTPException(status_code=400, detail="Creditor netting file has not been uploaded.")
+    if not erp_debtor_path.exists():
+        raise HTTPException(status_code=400, detail="Debtor ERP aging file has not been uploaded.")
+
+    output_dir = _user_output_dir(current_user.id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / SUPPLIER_NET_OUTPUT_FILENAME
+    try:
+        result = await run_in_threadpool(
+            generate_creditor_aging_report,
+            creditor_netting_path,
+            erp_debtor_path,
+            output_path,
+        )
+    except CreditorAgingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected error generating creditor aging report: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        action="Generate",
+        module=MODULE,
+        description=f"Generated {SUPPLIER_NET_OUTPUT_FILENAME}",
+        request=request,
+    )
+    return {
+        "message": "Creditor Aging and Supplier-wise Net Balance Report generated successfully.",
+        "filename": SUPPLIER_NET_OUTPUT_FILENAME,
+        "file_size": output_path.stat().st_size,
+        "report_date": result["report_date"].isoformat(),
+        "currency": result["currency"],
+        "debtor_total": str(result["debtor_total"]),
+        "creditor_total": str(result["creditor_total"]),
+        "net_total": str(result["net_total"]),
+    }
+
+
+@debtor_age_router.get("/download/creditor-aging")
+async def download_creditor_report(
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    output_path = _user_output_dir(current_user.id) / SUPPLIER_NET_OUTPUT_FILENAME
+    if not output_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Creditor aging report has not been generated yet.",
+        )
+    return FileResponse(
+        path=str(output_path),
+        filename=SUPPLIER_NET_OUTPUT_FILENAME,
         media_type=EXCEL_MEDIA_TYPE,
     )
 
