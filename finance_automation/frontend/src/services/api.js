@@ -1251,6 +1251,63 @@ export async function resetDebtorAgeData() {
   return safeJsonResponse(response, "Failed to reset Debtor Age Analysis data");
 }
 
+export async function uploadCreditorNettingFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE}/debtor-age/upload/creditor-netting`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to upload creditor netting file");
+  }
+  return response.json();
+}
+
+export async function uploadErpDebtorAgingFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE}/debtor-age/upload/erp-debtor-aging`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to upload debtor ERP aging file");
+  }
+  return response.json();
+}
+
+export async function generateCreditorAgingReport() {
+  const response = await fetch(`${API_BASE}/debtor-age/generate/creditor-aging`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to generate Creditor Aging and Supplier-wise Net Balance Report");
+}
+
+export async function downloadCreditorAgingReport(
+  filename = "Creditor_Aging_Supplier_Net_Balance_Report.xlsx"
+) {
+  const response = await fetch(`${API_BASE}/debtor-age/download/creditor-aging`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await readApiError(response, "Failed to download creditor aging report");
+    throw new Error(errorText);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
 export async function resetAccrualEntryData(period = "Sep-26") {
   const response = await fetch(
     `${API_BASE}/accrual-entry/reset?period=${encodeURIComponent(period)}`,
