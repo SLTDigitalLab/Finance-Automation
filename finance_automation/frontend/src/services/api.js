@@ -1272,3 +1272,22 @@ export async function resetCipData(period) {
   );
   return safeJsonResponse(response, "Failed to reset CIP Reconciliation data");
 }
+
+export async function generateBudgetActualReport(files) {
+  const formData = new FormData();
+  formData.append("budget", files.budget);
+  formData.append("actual", files.actual);
+  formData.append("mapping", files.mapping);
+  const response = await fetch(`${API_BASE}/budget-actual/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await parseResponseError(response, "Failed to generate Budget vs Actual report");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return { blob, filename: match?.[1] || "Budget_Vs_Actual_Variance.xlsx" };
+}
