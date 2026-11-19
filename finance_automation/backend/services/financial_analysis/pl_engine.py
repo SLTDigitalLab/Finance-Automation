@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 from services.financial_analysis.mapping_reader import GLMapping
 from services.financial_analysis.periods import Period, Quarter
-from services.financial_analysis.tb_reader import AccountBalance
+from services.financial_analysis.tb_reader import AccountBalance, ProductCategoryBalance
 
 DIVISOR = 1_000_000
 PL_ACCOUNT_START = 400000                     # natural accounts from 4xxxxx are P&L
@@ -101,6 +101,12 @@ class UnmappedAccount:
     name: str
     amount: float           # Rs Mn in the period where it was found
     period: str
+
+
+@dataclass
+class DimensionComparison:
+    current: Dict[str, float]
+    base: Dict[str, float]
 
 
 def _with_subtotals(lines: Dict[str, float]) -> Dict[str, float]:
@@ -249,9 +255,11 @@ class FinancialAnalysis:
     unmapped: List[UnmappedAccount] = field(default_factory=list)
     budget_available: bool = False
     budget: Optional[BudgetFigures] = None
+    revenue_categories: Dict[str, DimensionComparison] = field(default_factory=dict)
 
 
 YTDLoader = Callable[[Period], Optional[Mapping[int, AccountBalance]]]
+ProductCategoryLoader = Callable[[Period], Optional[Mapping[Tuple[int, str], ProductCategoryBalance]]]
 
 
 @dataclass
@@ -292,6 +300,7 @@ def build_analysis(
     mapping: GLMapping,
     budget_end: Optional[Dict] = None,
     budget_start: Optional[Dict] = None,
+    load_product_categories: Optional[ProductCategoryLoader] = None,
 ) -> FinancialAnalysis:
     """
     load_ytd(period) returns that month's account balances, or None if the
@@ -305,11 +314,27 @@ def build_analysis(
         raise MissingPeriodsError(missing)
 
     ytd: Dict[Period, PLFigures] = {}
+    category_ytd: Dict[Period, Dict[str, float]] = {}
     unmapped: Dict[int, UnmappedAccount] = {}
     for period in needed:
         ytd[period], found = compute_pl(balances[period], mapping, f"YTD {period.label}")
         for u in found:
             unmapped.setdefault(u.account, u)
+
+        category_totals: Dict[str, float] = {}
+        category_balances = load_product_categories(period) if load_product_categories else None
+        revenue_detail_found = False
+        for balance in (category_balances or {}).values():
+            if mapping.line_for(balance.account) != "revenue":
+                continue
+            revenue_detail_found = True
+            category = balance.product_category
+            category_totals[category] = category_totals.get(category, 0.0) - balance.ytd / DIVISOR
+        if not revenue_detail_found:
+            for account, balance in balances[period].items():
+                if mapping.line_for(account) == "revenue":
+                    category_totals[""] = category_totals.get("", 0.0) - balance.ytd / DIVISOR
+        category_ytd[period] = category_totals
 
     def quarter_figures(q: Quarter) -> PLFigures:
         end = ytd[q.end]
@@ -317,8 +342,21 @@ def build_analysis(
             return PLFigures(q.label, end.lines, end.accounts)
         return subtract(end, ytd[q.previous().end], q.label)
 
+    def category_figures(q: Quarter) -> Dict[str, float]:
+        end = category_ytd[q.end]
+        if q.quarter == 1:
+            return dict(end)
+        previous = category_ytd[q.previous().end]
+        return {
+            code: end.get(code, 0.0) - previous.get(code, 0.0)
+            for code in set(end) | set(previous)
+        }
+
     current = quarter_figures(quarter)
     last_year = quarter.same_quarter_last_year()
+    current_categories = category_figures(quarter)
+    last_year_categories = category_figures(last_year)
+    previous_categories = category_figures(quarter.previous())
     comparisons = {
         "quarter_vs_last_year": Comparison(
             "quarter_vs_last_year", f"{quarter.label} vs {last_year.label}",
@@ -329,6 +367,11 @@ def build_analysis(
         "ytd_vs_last_year": Comparison(
             "ytd_vs_last_year", f"YTD {quarter.end.label} vs YTD {last_year.end.label}",
             ytd[quarter.end], ytd[last_year.end]),
+    }
+    revenue_categories = {
+        "quarter_vs_last_year": DimensionComparison(current_categories, last_year_categories),
+        "quarter_vs_previous": DimensionComparison(current_categories, previous_categories),
+        "ytd_vs_last_year": DimensionComparison(category_ytd[quarter.end], category_ytd[last_year.end]),
     }
 
     budget_available = budget_end is not None
@@ -434,4 +477,5 @@ def build_analysis(
         unmapped=sorted(unmapped.values(), key=lambda u: u.account),
         budget_available=budget_available,
         budget=budget_fig,
+        revenue_categories=revenue_categories,
     )

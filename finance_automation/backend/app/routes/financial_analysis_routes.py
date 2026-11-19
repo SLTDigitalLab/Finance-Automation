@@ -17,7 +17,8 @@ from app.models.user_and_log import User
 from app.routes.use_case_routes import require_use_case
 from app.services.audit_logger import log_audit
 from config import settings
-from services.financial_analysis import mapping_store, tb_store
+from services.financial_analysis import chart_of_accounts_store, mapping_store, tb_store
+from services.financial_analysis.chart_of_accounts_reader import ChartOfAccountsFormatError
 from services.financial_analysis.budget_reader import BudgetFormatError
 from services.financial_analysis import budget_store
 from services.financial_analysis.mapping_reader import MappingFormatError
@@ -52,6 +53,10 @@ def _user_upload_dir(user_id: int) -> Path:
 
 def _user_mapping_dir(user_id: int) -> Path:
     return _user_upload_dir(user_id) / "mapping"
+
+
+def _user_chart_of_accounts_dir(user_id: int) -> Path:
+    return _user_upload_dir(user_id) / "chart_of_accounts_mapping"
 
 
 def _user_budget_dir(user_id: int) -> Path:
@@ -123,6 +128,9 @@ def get_status(
     return {
         "periods": [_period_json(r) for r in records],
         "mapping": mapping_store.mapping_info(_user_mapping_dir(current_user.id)),
+        "chart_of_accounts_mapping": chart_of_accounts_store.mapping_info(
+            _user_chart_of_accounts_dir(current_user.id)
+        ),
         "budgets": budgets,
         "budget": budgets[0] if budgets else None,
         "quarters": _quarter_options(loaded),
@@ -301,6 +309,37 @@ async def upload_mapping(
     }
 
 
+@financial_analysis_router.post("/chart-of-accounts-mapping")
+async def upload_chart_of_accounts_mapping(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Replaces the code-to-description workbook used for revenue and expenditure labels."""
+    path = await _save_upload(file)
+    mapping_dir = _user_chart_of_accounts_dir(current_user.id)
+    try:
+        await run_in_threadpool(
+            chart_of_accounts_store.save_mapping,
+            mapping_dir, path, file.filename, current_user.full_name, current_user.id,
+        )
+    except ChartOfAccountsFormatError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        path.unlink(missing_ok=True)
+
+    log_audit(
+        db=db, action="Upload Chart of Accounts Mapping", module=MODULE,
+        description=f"Uploaded Chart of Accounts Mapping {file.filename}",
+        user_id=current_user.id, user_name=current_user.full_name, request=request,
+    )
+    return {
+        "status": "success",
+        "mapping": chart_of_accounts_store.mapping_info(mapping_dir),
+    }
+
+
 def _summary(comparison) -> dict:
     rows = {r.key: r for r in comparison.rows}
     out = []
@@ -328,6 +367,7 @@ async def generate_financial_analysis(
 ):
     quarter = Quarter(body.year, body.quarter)
     mapping_dir = _user_mapping_dir(current_user.id)
+    chart_of_accounts_dir = _user_chart_of_accounts_dir(current_user.id)
     budget_dir = _user_budget_dir(current_user.id)
     rem_dir = _user_rem_dir(current_user.id)
     out_dir = _user_output_dir(current_user.id)
@@ -340,13 +380,30 @@ async def generate_financial_analysis(
     if mapping is None:
         raise HTTPException(status_code=422, detail="Upload the GL code mapping workbook first.")
 
+    try:
+        chart_of_accounts = await run_in_threadpool(
+            chart_of_accounts_store.load_mapping, chart_of_accounts_dir
+        )
+    except ChartOfAccountsFormatError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"The stored Chart of Accounts Mapping no longer reads: {exc}"
+        ) from exc
+    if chart_of_accounts is None:
+        raise HTTPException(status_code=422, detail="Upload the Chart of Accounts Mapping workbook first.")
+
     # Load budget data if available
     b_end = budget_store.load_budget(budget_dir, quarter.end)
     b_start = budget_store.load_budget(budget_dir, quarter.previous().end) if quarter.quarter > 1 else None
 
     load = lru_cache(maxsize=None)(lambda period: tb_store.load_ytd(db, period, user_id=current_user.id))
+    load_categories = lru_cache(maxsize=None)(
+        lambda period: tb_store.load_product_categories(db, period, user_id=current_user.id)
+    )
     try:
-        analysis = build_analysis(quarter, load, mapping, budget_end=b_end, budget_start=b_start)
+        analysis = build_analysis(
+            quarter, load, mapping, budget_end=b_end, budget_start=b_start,
+            load_product_categories=load_categories,
+        )
     except MissingPeriodsError as exc:
         raise HTTPException(
             status_code=422,
@@ -387,7 +444,13 @@ async def generate_financial_analysis(
 
         output_path = await run_in_threadpool(
             generate_report,
-            ReportInputs(analysis, trend, notes),
+            ReportInputs(
+                analysis,
+                trend,
+                notes,
+                chart_of_accounts.product_categories,
+                chart_of_accounts.accounts,
+            ),
             out_dir,
             mobitel_writeup=mobitel_writeup,
             group_pl_data=group_pl_data,

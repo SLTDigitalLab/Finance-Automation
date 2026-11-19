@@ -13,7 +13,9 @@ from app.auth.jwt_handler import get_current_active_user
 from app.database.connection import Base, get_db
 from app.models.user_and_log import User
 from app.routes import financial_analysis_routes as routes
-from tests.financial_analysis.helpers import write_mapping, write_tb
+from tests.financial_analysis.helpers import (
+    write_chart_of_accounts, write_mapping, write_tb,
+)
 
 MN = 1_000_000
 
@@ -68,6 +70,19 @@ def test_full_flow(client, tmp_path):
     assert resp.status_code == 200, resp.text
     assert resp.json()["mapping"]["filename"] == "map.xlsx"
 
+    resp = client.post(f"{api}/generate", json={"year": 2026, "quarter": 2})
+    assert resp.status_code == 422
+    assert "Chart of Accounts Mapping" in resp.json()["detail"]
+
+    chart_mapping = write_chart_of_accounts(
+        tmp_path / "chart-of-accounts.xlsx",
+        product_categories={0: "Mapped product category"},
+        accounts={511101: "Mapped staff cost"},
+    )
+    resp = _upload(client, f"{api}/chart-of-accounts-mapping", [chart_mapping])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["mapping"]["filename"] == "chart-of-accounts.xlsx"
+
     bad = tmp_path / "notes.xlsx"
     import openpyxl
     wb = openpyxl.Workbook()
@@ -82,6 +97,7 @@ def test_full_flow(client, tmp_path):
 
     status = client.get(f"{api}/status").json()
     assert [p["label"] for p in status["periods"]] == ["Mar 2026", "Jun 2025", "Mar 2025"]
+    assert status["chart_of_accounts_mapping"]["filename"] == "chart-of-accounts.xlsx"
 
     resp = client.post(f"{api}/generate", json={"year": 2026, "quarter": 2})
     assert resp.status_code == 422
@@ -107,6 +123,30 @@ def test_full_flow(client, tmp_path):
     text = "\n".join(p.text for p in Document(io.BytesIO(resp.content)).paragraphs)
     assert "Executive Summary" in text
     assert "SLT PLC revenue increased by 50.0% (LKR 60 Mn) in Q2’26 compared to Q2’25" in text
+    tables_text = "\n".join(
+        cell.text for table in Document(io.BytesIO(resp.content)).tables
+        for row in table.rows for cell in row.cells
+    )
+    assert "Mapped product category" in tables_text
+    assert "Mapped staff cost" in tables_text
+
+    replacement = write_chart_of_accounts(
+        tmp_path / "replacement-chart-of-accounts.xlsx",
+        product_categories={0: "Updated product category"},
+        accounts={511101: "Updated staff cost"},
+    )
+    resp = _upload(client, f"{api}/chart-of-accounts-mapping", [replacement])
+    assert resp.status_code == 200, resp.text
+    resp = client.post(f"{api}/generate", json={"year": 2026, "quarter": 2})
+    assert resp.status_code == 200, resp.text
+    replacement_report = client.get(f"{api}/download/{resp.json()['filename']}")
+    assert replacement_report.status_code == 200
+    replacement_doc = Document(io.BytesIO(replacement_report.content))
+    replacement_text = "\n".join(
+        cell.text for table in replacement_doc.tables for row in table.rows for cell in row.cells
+    )
+    assert "Updated product category" in replacement_text
+    assert "Updated staff cost" in replacement_text
 
     assert client.get(f"{api}/download/..%2Fsecret.docx").status_code in (400, 404)
 
