@@ -7,6 +7,7 @@ from services.financial_analysis.periods import Period, Quarter
 from services.financial_analysis.pl_engine import (
     MissingPeriodsError, build_analysis, compute_pl, required_periods,
 )
+from services.financial_analysis.tb_reader import ProductCategoryBalance
 from tests.financial_analysis.helpers import balances, write_mapping
 
 MN = 1_000_000
@@ -87,6 +88,40 @@ def test_quarter_figures_and_comparisons(mapping):
     assert ytd_rows["revenue"].base == pytest.approx(220)
     assert ytd_rows["taxation"].variance_pct is None                # zero base
     assert analysis.comparisons["ytd_vs_last_year"].title == "YTD Jun 2026 vs YTD Jun 2025"
+
+
+def test_revenue_product_category_variances_reconcile_to_existing_totals(mapping):
+    loaded = {
+        Period(2025, 3): ytd(100, 60),
+        Period(2025, 6): ytd(220, 130),
+        Period(2026, 3): ytd(150, 90),
+        Period(2026, 6): ytd(330, 190),
+    }
+    categories = {
+        Period(2025, 3): {("100", -40), ("110", -60)},
+        Period(2025, 6): {("100", -90), ("110", -130)},
+        Period(2026, 3): {("100", -60), ("110", -90)},
+        Period(2026, 6): {("100", -150), ("110", -180)},
+    }
+
+    def load_categories(period):
+        return {
+            (411101, code): ProductCategoryBalance(411101, code, ytd=amount * MN)
+            for code, amount in categories[period]
+        }
+
+    analysis = build_analysis(
+        Quarter(2026, 2), loaded.get, mapping, load_product_categories=load_categories
+    )
+    product_comparison = analysis.revenue_categories["quarter_vs_last_year"]
+    variances = {
+        code: product_comparison.current.get(code, 0) - product_comparison.base.get(code, 0)
+        for code in set(product_comparison.current) | set(product_comparison.base)
+    }
+    assert variances == {"100": pytest.approx(40), "110": pytest.approx(20)}
+    assert sum(variances.values()) == pytest.approx(
+        analysis.comparisons["quarter_vs_last_year"].rows[0].variance
+    )
 
 
 def test_q1_compares_with_last_years_q4(mapping):

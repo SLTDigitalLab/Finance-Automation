@@ -6,8 +6,9 @@ Expected columns (located by header text, so column order may change):
 
 The period comes from the "YTD <Mon YY>" header. Rows are one per GL code
 combination (~50k); they are summed to one balance per natural account, which
-is all the P&L analysis needs. Amounts stay in rupees with the TB sign
-convention (debits positive, credits negative).
+is all the P&L analysis needs. The same rows are also grouped by natural
+account and product category for Revenue detail. Amounts stay in rupees with
+the TB sign convention (debits positive, credits negative).
 """
 import re
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from services.financial_analysis.periods import Period, parse_period
 from utils.logger import logger
 
 ACCOUNT_SEGMENT = 5          # natural account is the 6th segment of the GL code
+PRODUCT_CATEGORY_SEGMENT = 4 # product category is the 5th segment of the GL code
 HEADER_SEARCH_ROWS = 20
 BALANCE_TOLERANCE = 100.0    # rupees; the exports carry small rounding differences
 ROW_TOLERANCE = 1.0          # rupees; per row Beginning + PTD vs YTD
@@ -39,12 +41,22 @@ class AccountBalance:
 
 
 @dataclass
+class ProductCategoryBalance:
+    account: int
+    product_category: str
+    beginning: float = 0.0
+    ptd: float = 0.0
+    ytd: float = 0.0
+
+
+@dataclass
 class TrialBalance:
     period: Period
     accounts: Dict[int, AccountBalance]
     row_count: int
     net_ytd: float
     warnings: List[str] = field(default_factory=list)
+    product_category_accounts: Dict[tuple, ProductCategoryBalance] = field(default_factory=dict)
 
 
 def _norm(value) -> str:
@@ -75,6 +87,15 @@ def _account_from_gl(gl_code) -> Optional[int]:
     if len(parts) > ACCOUNT_SEGMENT and parts[ACCOUNT_SEGMENT].strip().isdigit():
         return int(parts[ACCOUNT_SEGMENT])
     return None
+
+
+def _product_category_from_gl(gl_code) -> str:
+    parts = str(gl_code).split(".")
+    if len(parts) > PRODUCT_CATEGORY_SEGMENT:
+        value = parts[PRODUCT_CATEGORY_SEGMENT].strip()
+        if value.isdigit():
+            return str(int(value))
+    return ""
 
 
 def read_trial_balance(path: Union[str, Path], sheet_name: Union[int, str] = 0) -> TrialBalance:
@@ -118,6 +139,10 @@ def read_trial_balance(path: Union[str, Path], sheet_name: Union[int, str] = 0) 
         from_gl = data.iloc[:, cols["gl_code"]].map(_account_from_gl)
         account = account.fillna(from_gl) if "account" in cols else from_gl
     names = data.iloc[:, cols["name"]].astype(str).str.strip() if "name" in cols else pd.Series("", index=data.index)
+    product_categories = (
+        data.iloc[:, cols["gl_code"]].map(_product_category_from_gl)
+        if "gl_code" in cols else pd.Series("", index=data.index)
+    )
 
     blank = account.isna()
     unidentified = blank & ((ytd != 0) | (ptd != 0))
@@ -130,6 +155,7 @@ def read_trial_balance(path: Union[str, Path], sheet_name: Union[int, str] = 0) 
     frame = pd.DataFrame({
         "account": account[~blank].astype(int),
         "name": names[~blank],
+        "product_category": product_categories[~blank],
         "beginning": beginning[~blank],
         "ptd": ptd[~blank],
         "ytd": ytd[~blank],
@@ -153,8 +179,24 @@ def read_trial_balance(path: Union[str, Path], sheet_name: Union[int, str] = 0) 
         int(acc): AccountBalance(int(acc), row["name"], float(row["beginning"]), float(row["ptd"]), float(row["ytd"]))
         for acc, row in grouped.iterrows()
     }
+    category_grouped = frame.groupby(["account", "product_category"], dropna=False).agg(
+        beginning=("beginning", "sum"), ptd=("ptd", "sum"), ytd=("ytd", "sum")
+    )
+    product_category_accounts = {
+        (int(acc), str(category)): ProductCategoryBalance(
+            int(acc), str(category), float(row["beginning"]), float(row["ptd"]), float(row["ytd"])
+        )
+        for (acc, category), row in category_grouped.iterrows()
+    }
 
     for w in warnings:
         logger.warning(f"{path.name}: {w}")
     logger.info(f"Read TB {path.name}: {period.label}, {len(frame)} rows, {len(accounts)} accounts")
-    return TrialBalance(period=period, accounts=accounts, row_count=len(frame), net_ytd=net_ytd, warnings=warnings)
+    return TrialBalance(
+        period=period,
+        accounts=accounts,
+        row_count=len(frame),
+        net_ytd=net_ytd,
+        warnings=warnings,
+        product_category_accounts=product_category_accounts,
+    )

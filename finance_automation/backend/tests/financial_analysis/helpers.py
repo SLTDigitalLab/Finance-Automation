@@ -5,16 +5,33 @@ from services.financial_analysis.tb_reader import AccountBalance
 
 
 def write_tb(path, ytd_header, rows, ptd_header=None, preamble=0):
-    """rows: (account, name, beginning, ptd, ytd). account may be str or int."""
+    """Rows are (account, name, beginning, ptd, ytd[, product_category])."""
     wb = openpyxl.Workbook()
     ws = wb.active
     for _ in range(preamble):
         ws.append(["Sri Lanka Telecom PLC"])
     ws.append(["A/c", "A/c Name", "GL code", "Beginning balance",
                ptd_header or ytd_header.replace("YTD", "PTD"), ytd_header])
-    for acc, name, beg, ptd, ytd in rows:
-        gl = f"01.0000.000.00.000.{acc}.00.00.000" if acc is not None else None
+    for row in rows:
+        acc, name, beg, ptd, ytd = row[:5]
+        product_category = row[5] if len(row) > 5 else 0
+        gl = f"01.0000.000.00.{product_category}.{acc}.00.00.000" if acc is not None else None
         ws.append([acc, name, gl, beg, ptd, ytd])
+    wb.save(path)
+    return path
+
+
+def write_chart_of_accounts(path, product_categories=None, accounts=None):
+    wb = openpyxl.Workbook()
+    product_sheet = wb.active
+    product_sheet.title = "Product Category"
+    product_sheet.append(["Translated Value", "Description", "Enabled", "From", "To", "[  ]"])
+    for code, description in (product_categories or {}).items():
+        product_sheet.append([code, description, "*", None, None, "."])
+    account_sheet = wb.create_sheet("Account")
+    account_sheet.append(["Translated Value", "Description", "Enabled", "From", "To", "[  ]"])
+    for code, description in (accounts or {}).items():
+        account_sheet.append([code, description, "*", None, None, "."])
     wb.save(path)
     return path
 
