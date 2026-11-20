@@ -1,14 +1,9 @@
 import pytest
 
 from services.financial_analysis.mapping_reader import MappingFormatError, read_gl_mapping
-from services.financial_analysis.chart_of_accounts_reader import (
-    ChartOfAccountsFormatError, read_chart_of_accounts,
-)
 from services.financial_analysis.periods import Period, Quarter, parse_period
 from services.financial_analysis.tb_reader import TBFormatError, read_trial_balance
-from tests.financial_analysis.helpers import (
-    write_chart_of_accounts, write_mapping, write_tb,
-)
+from tests.financial_analysis.helpers import write_mapping, write_tb
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -51,43 +46,6 @@ def test_tb_sums_rows_per_account(tmp_path):
     assert tb.accounts[411101].name == "Initiation"
     assert tb.net_ytd == 0
     assert tb.warnings == []
-
-
-def test_tb_preserves_product_category_amounts_without_duplicate_groups(tmp_path):
-    path = write_tb(tmp_path / "tb.xlsx", "YTD June 26", [
-        (411101, "Voice", 0, -30, -100, 100),
-        (411101, "Voice", 0, -20, -50, 100),
-        (411101, "Voice", 0, -10, -25, 110),
-    ])
-    tb = read_trial_balance(path)
-    assert tb.accounts[411101].ytd == -175
-    assert {
-        key: balance.ytd for key, balance in tb.product_category_accounts.items()
-    } == {
-        (411101, "100"): -150,
-        (411101, "110"): -25,
-    }
-
-
-def test_chart_of_accounts_reads_required_sheets_and_normalizes_codes(tmp_path):
-    path = write_chart_of_accounts(
-        tmp_path / "coa.xlsx",
-        product_categories={100: "Voice"},
-        accounts={411101: "Revenue"},
-    )
-    mapping = read_chart_of_accounts(path)
-    assert mapping.product_categories == {"100": "Voice"}
-    assert mapping.accounts == {"411101": "Revenue"}
-
-
-def test_chart_of_accounts_rejects_conflicting_duplicate_code(tmp_path):
-    path = write_chart_of_accounts(tmp_path / "coa.xlsx", product_categories={100: "Voice"})
-    import openpyxl
-    wb = openpyxl.load_workbook(path)
-    wb["Product Category"].append([100, "Other Voice"])
-    wb.save(path)
-    with pytest.raises(ChartOfAccountsFormatError, match="more than one description"):
-        read_chart_of_accounts(path)
 
 
 def test_tb_header_below_title_rows(tmp_path):

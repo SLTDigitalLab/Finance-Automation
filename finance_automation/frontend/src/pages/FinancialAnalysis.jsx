@@ -54,7 +54,6 @@ import {
   uploadFABudgets,
   getRemainingInputsStatus,
   uploadGlMapping,
-  uploadChartOfAccountsMapping,
   uploadGroupPL,
   uploadMobitelWriteup,
   uploadTrialBalances,
@@ -185,7 +184,6 @@ export default function FinancialAnalysis() {
   const navigate = useNavigate();
   const tbInputRef = useRef(null);
   const mappingInputRef = useRef(null);
-  const chartOfAccountsInputRef = useRef(null);
   const budgetInputRef = useRef(null);
   const currentYear = new Date().getFullYear();
 
@@ -195,7 +193,6 @@ export default function FinancialAnalysis() {
 
   const [mappingUploading, setMappingUploading] = useState(false);
   const [mappingResult, setMappingResult] = useState(null);
-  const [chartOfAccountsUploading, setChartOfAccountsUploading] = useState(false);
 
   const [budgetFiles, setBudgetFiles] = useState([]);
   const [budgetDragging, setBudgetDragging] = useState(false);
@@ -281,26 +278,6 @@ export default function FinancialAnalysis() {
       setError(err.message || "Failed to upload the GL code mapping");
     } finally {
       setMappingUploading(false);
-    }
-  };
-
-  const handleChartOfAccountsSelected = async (file) => {
-    if (!file) return;
-    const problem = validateFile(file);
-    if (chartOfAccountsInputRef.current) chartOfAccountsInputRef.current.value = "";
-    if (problem) {
-      setError(problem);
-      return;
-    }
-    setError("");
-    setChartOfAccountsUploading(true);
-    try {
-      await uploadChartOfAccountsMapping(file);
-      await refreshStatus();
-    } catch (err) {
-      setError(err.message || "Failed to upload the Chart of Accounts Mapping");
-    } finally {
-      setChartOfAccountsUploading(false);
     }
   };
 
@@ -461,11 +438,8 @@ export default function FinancialAnalysis() {
   };
 
   const mapping = status?.mapping;
-  const chartOfAccountsMapping = status?.chart_of_accounts_mapping;
   const periods = status?.periods || [];
-  const canGenerate = Boolean(
-    mapping && chartOfAccountsMapping && quarter && quarter.missing.length === 0 && !generating
-  );
+  const canGenerate = Boolean(mapping && quarter && quarter.missing.length === 0 && !generating);
 
   return (
     <ThemeProvider theme={theme}>
@@ -584,7 +558,7 @@ export default function FinancialAnalysis() {
                   <SectionCard
                     step={1}
                     title="GL code mapping"
-                    subtitle="The '6.PL-EBITDA' sheet maps account ranges to P&L lines. Upload this and the Chart of Accounts Mapping workbook before generating."
+                    subtitle="The '6.PL-EBITDA' sheet that maps account ranges to P&L lines. Upload again only when Finance changes it."
                   >
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
                       <div className="flex min-w-0 items-center gap-3">
@@ -616,39 +590,6 @@ export default function FinancialAnalysis() {
                         accept={ACCEPTED_EXTENSIONS.join(",")}
                         className="hidden"
                         onChange={(e) => handleMappingSelected(e.target.files?.[0])}
-                      />
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <MappingIcon sx={{ color: chartOfAccountsMapping ? "#7AB648" : "#94a3b8" }} />
-                        <div className="min-w-0">
-                          <p className="text-sm font-extrabold text-slate-800">Chart of Accounts Mapping</p>
-                          <p className="truncate text-xs font-semibold text-slate-500">
-                            {chartOfAccountsMapping?.filename || "Required Excel workbook"}
-                          </p>
-                          {chartOfAccountsMapping?.uploaded_at && (
-                            <p className="text-xs font-semibold text-slate-500">
-                              Uploaded {formatDate(chartOfAccountsMapping.uploaded_at)}
-                              {chartOfAccountsMapping.uploaded_by ? ` by ${chartOfAccountsMapping.uploaded_by}` : ""}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <Button
-                        onClick={() => chartOfAccountsInputRef.current?.click()}
-                        disabled={chartOfAccountsUploading}
-                        variant="outlined"
-                        startIcon={<UploadIcon />}
-                        sx={{ textTransform: "none", fontWeight: 800, borderRadius: 1.5 }}
-                      >
-                        {chartOfAccountsUploading ? "Uploading…" : chartOfAccountsMapping ? "Replace" : "Upload"}
-                      </Button>
-                      <input
-                        ref={chartOfAccountsInputRef}
-                        type="file"
-                        accept={ACCEPTED_EXTENSIONS.join(",")}
-                        className="hidden"
-                        onChange={(e) => handleChartOfAccountsSelected(e.target.files?.[0])}
                       />
                     </div>
                     {mappingResult?.warnings?.length > 0 && (
@@ -1300,11 +1241,6 @@ export default function FinancialAnalysis() {
                     {status && !mapping && (
                       <Alert severity="warning" icon={<WarningIcon />} sx={{ mt: 2 }}>
                         Upload the GL code mapping first.
-                      </Alert>
-                    )}
-                    {status && !chartOfAccountsMapping && (
-                      <Alert severity="warning" icon={<WarningIcon />} sx={{ mt: 2 }}>
-                        Upload the Chart of Accounts Mapping first.
                       </Alert>
                     )}
 
