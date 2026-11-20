@@ -228,25 +228,6 @@ class FATrialBalanceAccount(Base):
     ytd_balance = Column(Float, default=0.0)
 
 
-class FATrialBalanceProductCategory(Base):
-    """A trial balance grouped by natural account and product category."""
-    __tablename__ = "fa_trial_balance_product_categories"
-    __table_args__ = (
-        UniqueConstraint(
-            "trial_balance_id", "account", "product_category",
-            name="uq_fa_trial_balance_product_categories_tb_account_category",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    trial_balance_id = Column(Integer, ForeignKey("fa_trial_balances.id"), nullable=False, index=True)
-    account = Column(Integer, nullable=False)
-    product_category = Column(String, nullable=False)
-    beginning_balance = Column(Float, default=0.0)
-    period_activity = Column(Float, default=0.0)
-    ytd_balance = Column(Float, default=0.0)
-
-
 class UserUseCaseAccess(Base):
     """Which finance use case(s) an email may open. Keyed by email so access can be granted before first login."""
     __tablename__ = "user_use_case_access"

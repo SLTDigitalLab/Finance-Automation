@@ -897,18 +897,6 @@ export async function uploadGlMapping(file) {
   return safeJsonResponse(response, "Failed to upload the GL code mapping");
 }
 
-export async function uploadChartOfAccountsMapping(file) {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const response = await fetch(`${API_BASE}/financial-analysis/chart-of-accounts-mapping`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: formData,
-  });
-  return safeJsonResponse(response, "Failed to upload the Chart of Accounts Mapping");
-}
-
 export async function generateFinancialAnalysis(year, quarter) {
   const response = await fetch(`${API_BASE}/financial-analysis/generate`, {
     method: "POST",
