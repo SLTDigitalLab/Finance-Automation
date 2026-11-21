@@ -18,7 +18,7 @@ document:
   - Section (D) Actuals vs Budget (SLT PLC table with actuals, budget note & commentary, Mobitel)
   - Key Projects Info – SLT PLC (FTTH Service-wise and RTOM-wise utilization tables preserved)
   - Annexure (i) – Borrowings Re-payment Schedule (preserved)
-  - Annexure (ii) – Revenue product-category and Opex natural-account drivers across YoY, QoQ, YTD
+  - Annexure (ii) – Account-level variance drivers (GL drivers for Revenue and Opex across YoY, QoQ, YTD)
   - Sections to be completed by Finance & Data notes
 """
 import calendar
@@ -72,8 +72,6 @@ class ReportInputs:
     analysis: FinancialAnalysis
     trend: List[MonthFigures]
     data_notes: List[str] = field(default_factory=list)
-    product_category_names: Dict[str, str] = field(default_factory=dict)
-    account_names: Dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -402,41 +400,16 @@ def _fill_rows(tbl, header_rows: int, values: List[List[str]], colors: Sequence[
         tbl.append(tr)
 
 
-def _driver_rows(comparison: Comparison, line: str, cost: bool, account_names: Dict[str, str]):
+def _driver_rows(comparison: Comparison, line: str, cost: bool):
     """Table rows and their % colours for the accounts that moved a line the most."""
     rows, colors = [], []
     for d in comparison.drivers(line, limit=DRIVER_ROWS):
         sign = -1 if cost else 1
         cur, base = sign * d.current, sign * d.base
         diff, pct = _growth(cur, base)
-        name = account_names.get(str(d.account)) or d.name.strip()
-        rows.append([f"{d.account} {name}".strip(), money(cur), money(base), money(diff), percent(pct)])
+        rows.append([f"{d.account} {d.name.strip()}", money(cur), money(base), money(diff), percent(pct)])
         colors.append(_favour_color(diff, cost))
     return rows, colors
-
-
-def _product_category_rows(category_comparison, descriptions: Dict[str, str]):
-    if category_comparison is None:
-        return [], []
-    rows = []
-    for code in set(category_comparison.current) | set(category_comparison.base):
-        current = category_comparison.current.get(code, 0.0)
-        base = category_comparison.base.get(code, 0.0)
-        diff, pct = _growth(current, base)
-        if abs(diff) < 1e-9:
-            continue
-        description = descriptions.get(code)
-        label = (
-            "Unmapped product category" if not code
-            else f"{code} {description}" if description
-            else f"{code} (unmapped)"
-        )
-        rows.append((abs(diff), code, [
-            label, money(current), money(base), money(diff), percent(pct),
-        ], _favour_color(diff)))
-    rows.sort(key=lambda item: (-item[0], item[1]))
-    selected = rows[:DRIVER_ROWS]
-    return [item[2] for item in selected], [item[3] for item in selected]
 
 
 def _update_financial_summary(tbl, ytd: Comparison, end: Period, ly_end: Period, budget: Optional[BudgetFigures] = None):
@@ -1227,25 +1200,13 @@ def generate_report(
     for spec in specs:
         comparison = analysis.comparisons[spec.comparison_key]
         for line, name, cost in (("revenue", "Revenue", False), ("operating_costs", "Opex", True)):
-            if line == "revenue":
-                rows, colors = _product_category_rows(
-                    analysis.revenue_categories.get(spec.comparison_key),
-                    inputs.product_category_names,
-                )
-                first_column = "Product Category"
-            else:
-                rows, colors = _driver_rows(comparison, line, cost, inputs.account_names)
-                first_column = "Natural Account"
+            rows, colors = _driver_rows(comparison, line, cost)
             if not rows:
                 continue
-            detail_label = "Product Category" if line == "revenue" else "Natural Account"
-            b.caption(
-                f"{name} – largest movements by {detail_label}, "
-                f"{spec.current_label} Vs {spec.base_label} (LKR Mn)"
-            )
+            b.caption(f"{name} – largest movements by GL account, {spec.current_label} Vs {spec.base_label} (LKR Mn)")
             tbl = b.table(b.t.is_table)
             head = _cells(tbl.findall(qn("w:tr"))[0])
-            _set_cell(head[0], first_column)
+            _set_cell(head[0], "GL account")
             _set_cell(head[1], *spec.header_current)
             _set_cell(head[2], *spec.header_base)
             _fill_rows(tbl, 2, rows, colors)

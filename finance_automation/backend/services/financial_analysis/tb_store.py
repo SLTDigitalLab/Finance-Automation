@@ -1,19 +1,15 @@
 """
-Keeps each month's trial balance (summed to natural account and product
-category) in the database, so a quarterly run only needs the new month's file:
-the comparison periods are already stored.
+Keeps each month's trial balance (summed to natural account) in the database,
+so a quarterly run only needs the new month's file: the comparison periods are
+already stored.
 """
 from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.user_and_log import (
-    FATrialBalance, FATrialBalanceAccount, FATrialBalanceProductCategory,
-)
+from app.models.user_and_log import FATrialBalance, FATrialBalanceAccount
 from services.financial_analysis.periods import Period
-from services.financial_analysis.tb_reader import (
-    AccountBalance, ProductCategoryBalance, TrialBalance,
-)
+from services.financial_analysis.tb_reader import AccountBalance, TrialBalance
 from utils.logger import logger
 
 
@@ -34,9 +30,6 @@ def save_trial_balance(db: Session, tb: TrialBalance, source_filename: str = Non
     if existing:
         db.query(FATrialBalanceAccount).filter(
             FATrialBalanceAccount.trial_balance_id == existing.id
-        ).delete(synchronize_session=False)
-        db.query(FATrialBalanceProductCategory).filter(
-            FATrialBalanceProductCategory.trial_balance_id == existing.id
         ).delete(synchronize_session=False)
         db.delete(existing)
         db.flush()
@@ -63,18 +56,6 @@ def save_trial_balance(db: Session, tb: TrialBalance, source_filename: str = Non
         }
         for bal in tb.accounts.values()
     ])
-    if tb.product_category_accounts:
-        db.bulk_insert_mappings(FATrialBalanceProductCategory, [
-            {
-                "trial_balance_id": record.id,
-                "account": bal.account,
-                "product_category": bal.product_category,
-                "beginning_balance": bal.beginning,
-                "period_activity": bal.ptd,
-                "ytd_balance": bal.ytd,
-            }
-            for bal in tb.product_category_accounts.values()
-        ])
     db.commit()
     logger.info(f"{'Replaced' if existing else 'Stored'} trial balance {tb.period.label} for user {user_id} ({len(tb.accounts)} accounts)")
     return record
@@ -86,9 +67,6 @@ def delete_trial_balance(db: Session, period: Period, user_id: Optional[int] = N
         return False
     db.query(FATrialBalanceAccount).filter(
         FATrialBalanceAccount.trial_balance_id == record.id
-    ).delete(synchronize_session=False)
-    db.query(FATrialBalanceProductCategory).filter(
-        FATrialBalanceProductCategory.trial_balance_id == record.id
     ).delete(synchronize_session=False)
     db.delete(record)
     db.commit()
@@ -117,19 +95,3 @@ def list_periods(db: Session, user_id: Optional[int] = None) -> List[FATrialBala
         .order_by(FATrialBalance.period_year.desc(), FATrialBalance.period_month.desc())
         .all()
     )
-
-
-def load_product_categories(db: Session, period: Period, user_id: Optional[int] = None):
-    record = _find(db, period, user_id=user_id)
-    if record is None:
-        return None
-    rows = db.query(FATrialBalanceProductCategory).filter(
-        FATrialBalanceProductCategory.trial_balance_id == record.id
-    ).all()
-    return {
-        (row.account, row.product_category): ProductCategoryBalance(
-            row.account, row.product_category, row.beginning_balance or 0.0,
-            row.period_activity or 0.0, row.ytd_balance or 0.0,
-        )
-        for row in rows
-    }

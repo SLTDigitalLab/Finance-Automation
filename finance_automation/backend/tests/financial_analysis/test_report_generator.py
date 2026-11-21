@@ -7,12 +7,8 @@ from docx.oxml.ns import qn
 
 from services.financial_analysis.mapping_reader import read_gl_mapping
 from services.financial_analysis.periods import Period, Quarter
-from services.financial_analysis.pl_engine import (
-    DimensionComparison, build_analysis, monthly_trend,
-)
-from services.financial_analysis.report_generator import (
-    TEMPLATE_PATH, ReportInputs, _product_category_rows, generate_report,
-)
+from services.financial_analysis.pl_engine import build_analysis, monthly_trend
+from services.financial_analysis.report_generator import TEMPLATE_PATH, ReportInputs, generate_report
 from tests.financial_analysis.helpers import balances, write_mapping
 
 MN = 1_000_000
@@ -89,17 +85,6 @@ def test_growth_colours_follow_favourability(report):
         return str(run.font.color.rgb)
     assert color(2) == "00B050"     # revenue up: favourable
     assert color(3) == "EE0000"     # opex up: unfavourable
-
-
-def test_unmatched_product_category_codes_keep_their_values():
-    rows, _ = _product_category_rows(
-        DimensionComparison(current={"999": 12.0, "": 2.0}, base={"999": 7.0, "": 1.0}),
-        {"100": "Voice"},
-    )
-    assert rows == [
-        ["999 (unmapped)", "12", "7", "5", "71.4%"],
-        ["Unmapped product category", "2", "1", "1", "100.0%"],
-    ]
 
 
 def test_commentary_and_notes(report):
