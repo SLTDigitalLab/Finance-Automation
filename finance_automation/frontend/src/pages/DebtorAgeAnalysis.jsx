@@ -8,8 +8,6 @@ import {
   LinearProgress,
   Paper,
   Tooltip,
-  ToggleButton,
-  ToggleButtonGroup,
 } from "@mui/material";
 import {
   AccountBalance as AccountBalanceIcon,
@@ -25,7 +23,6 @@ import {
   PlayArrow as GenerateIcon,
   QueryStats as ForecastIcon,
   Receipt as ReceiptIcon,
-  Refresh as RefreshIcon,
   RestartAlt as ResetIcon,
   Security as SecurityIcon,
   Slideshow as BoardPackIcon,
@@ -36,16 +33,13 @@ import { useAuth } from "../contexts/AuthContext";
 import { visibleNavItems } from "../config/useCases";
 import {
   deleteDebtorAgeFile,
-  downloadDebtorAgeReport,
-  downloadCreditorAgingReport,
-  generateCreditorAgingReport,
-  generateDebtorAgeReport,
+  downloadAllAgingReports,
+  generateAllAgingReports,
   getDebtorAgeStatus,
   resetDebtorAgeData,
   uploadDebtorAgingFile,
-  uploadCreditorNettingFile,
+  uploadSharedNettingReportFile,
   uploadErpDebtorAgingFile,
-  uploadNettingReportFile,
 } from "../services/api";
 import lightLogo from "../Assets/sltmobitel-logo-png_seeklogo-433080.png";
 
@@ -57,11 +51,11 @@ const NAV_ITEMS = [
   { label: "Financial Analysis", icon: AssessmentIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: AccountBalanceIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: ReceiptIcon, path: "/accrual-entry-report" },
-  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis", active: true },
+  { label: "Debtor & Creditor Aging Analysis", icon: DebtorIcon, path: "/debtor-age-analysis", active: true },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
 
-const DEBTOR_INPUTS = [
+const AGING_INPUTS = [
   {
     key: "debtor_aging",
     fileKey: "debtor-aging",
@@ -70,18 +64,9 @@ const DEBTOR_INPUTS = [
   },
   {
     key: "netting_report",
-    fileKey: "netting-report",
+    fileKey: "shared-netting-report",
     title: "SLT AR/AP Netting Report Workbook",
-    description: "Transaction-level AR/AP details for international operators with transaction numbers and dates.",
-  },
-];
-
-const CREDITOR_INPUTS = [
-  {
-    key: "creditor_netting",
-    fileKey: "creditor-netting",
-    title: "SLT AR/AP Netting Report – Creditor",
-    description: "Payable transactions with supplier names, due dates, currencies and Entered Due Remaining in column Q.",
+    description: "One shared workbook. The Debtor and Creditor processes select the relevant receivable and payable transactions.",
   },
   {
     key: "erp_debtor_aging",
@@ -98,7 +83,7 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
+function InputCard({ input, fileInfo, busy, disabled, onUpload, onDelete }) {
   const fileInputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const isUploaded = !!fileInfo?.uploaded;
@@ -107,7 +92,7 @@ function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
     e.preventDefault();
     setDragging(false);
     const dropped = e.dataTransfer.files?.[0];
-    if (dropped) onUpload(input.fileKey, dropped);
+    if (dropped && !disabled) onUpload(input.fileKey, dropped);
   };
 
   return (
@@ -132,19 +117,20 @@ function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".xlsx,.xls,.xlsm"
+        accept=".xlsx,.xls"
+        disabled={disabled}
         hidden
         onChange={(event) => {
           const selected = event.target.files?.[0];
-          if (selected) onUpload(input.fileKey, selected);
+          if (selected && !disabled) onUpload(input.fileKey, selected);
           event.target.value = "";
         }}
       />
 
       {!isUploaded ? (
         <div
-          onClick={() => !busy && fileInputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onClick={() => !disabled && fileInputRef.current?.click()}
+          onDragOver={(e) => { if (!disabled) { e.preventDefault(); setDragging(true); } }}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
           className={`mt-4 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 cursor-pointer transition-colors ${
@@ -166,11 +152,11 @@ function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
           <Button
             variant="outlined"
             startIcon={busy ? <CircularProgress size={16} /> : <UploadIcon />}
-            disabled={busy}
+            disabled={disabled}
             onClick={() => fileInputRef.current?.click()}
             sx={{ textTransform: "none", fontWeight: 800, borderRadius: 2 }}
           >
-            Replace workbook
+            {busy ? "Uploading..." : "Replace workbook"}
           </Button>
           <span className="min-w-0 break-all text-sm font-semibold text-slate-600">
             {fileInfo.filename} ({formatBytes(fileInfo.size)})
@@ -179,6 +165,7 @@ function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
             <button
               type="button"
               onClick={() => onDelete(input.fileKey)}
+              disabled={disabled}
               className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
               aria-label={`Remove ${input.title}`}
             >
@@ -194,9 +181,9 @@ function InputCard({ input, fileInfo, busy, onUpload, onDelete }) {
 export default function DebtorAgeAnalysis() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const uploadInProgress = useRef(false);
 
   const [status, setStatus] = useState(null);
-  const [reportMode, setReportMode] = useState("debtor");
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [busyKey, setBusyKey] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -224,6 +211,8 @@ export default function DebtorAgeAnalysis() {
   }, [loadStatus]);
 
   const handleUpload = async (fileKey, file) => {
+    if (uploadInProgress.current) return;
+    uploadInProgress.current = true;
     setBusyKey(fileKey);
     setErrorMessage("");
     setSuccessMessage("");
@@ -231,20 +220,20 @@ export default function DebtorAgeAnalysis() {
       if (fileKey === "debtor-aging") {
         await uploadDebtorAgingFile(file);
         setSuccessMessage("Debtor Aging file uploaded and validated successfully.");
-      } else if (fileKey === "netting-report") {
-        await uploadNettingReportFile(file);
-        setSuccessMessage("AR/AP Netting Report uploaded and validated successfully.");
-      } else if (fileKey === "creditor-netting") {
-        await uploadCreditorNettingFile(file);
-        setSuccessMessage("Creditor Netting Report uploaded and validated successfully.");
+      } else if (fileKey === "shared-netting-report") {
+        await uploadSharedNettingReportFile(file);
+        setSuccessMessage("Shared AR/AP Netting Report uploaded and validated for both processes.");
       } else {
         await uploadErpDebtorAgingFile(file);
         setSuccessMessage("Debtor ERP Aging Report uploaded and validated successfully.");
       }
+      setProgress(0);
+      setGenerationStage("");
       await loadStatus();
     } catch (err) {
       setErrorMessage(err.message || "Upload failed.");
     } finally {
+      uploadInProgress.current = false;
       setBusyKey("");
     }
   };
@@ -254,6 +243,8 @@ export default function DebtorAgeAnalysis() {
     setSuccessMessage("");
     try {
       await deleteDebtorAgeFile(fileKey);
+      setProgress(0);
+      setGenerationStage("");
       setSuccessMessage("File removed.");
       await loadStatus();
     } catch (err) {
@@ -264,50 +255,40 @@ export default function DebtorAgeAnalysis() {
   const handleGenerate = async () => {
     setErrorMessage("");
     setSuccessMessage("");
+    setStatus((current) => current && ({
+      ...current,
+      all_reports_ready: false,
+      all_reports_filename: null,
+      generation_summary: null,
+      reports_outdated: allReady,
+    }));
     setGenerating(true);
     setProgress(15);
-    setGenerationStage("Reading uploaded source workbooks...");
+    setGenerationStage("Reading the three uploaded source workbooks...");
 
     const t1 = setTimeout(() => {
       setProgress(40);
-      setGenerationStage(
-        reportMode === "debtor"
-          ? "Matching counterparty transactions and invoice numbers..."
-          : "Matching suppliers and calculating signed creditor balances..."
-      );
+      setGenerationStage("Generating the Debtor Aging report...");
     }, 350);
 
     const t2 = setTimeout(() => {
       setProgress(70);
-      setGenerationStage(
-        reportMode === "debtor"
-          ? "Calculating days past due and aging buckets (0-30, 31-60, ... 1096+)..."
-          : "Calculating creditor and supplier-wise net aging buckets..."
-      );
+      setGenerationStage("Generating Creditor Aging and Supplier-wise Net Aging reports...");
     }, 700);
 
     const t3 = setTimeout(() => {
       setProgress(90);
-      setGenerationStage(
-        reportMode === "debtor"
-          ? "Preserving customer account codes, computing subtotals, and finalizing report..."
-          : "Reconciling debtor, creditor and supplier totals..."
-      );
+      setGenerationStage("Reconciling totals and packaging all reports...");
     }, 1100);
 
     try {
-      const result = reportMode === "debtor"
-        ? await generateDebtorAgeReport()
-        : await generateCreditorAgingReport();
+      const result = await generateAllAgingReports();
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
       setProgress(100);
-      const reportName = reportMode === "debtor"
-        ? "Debtor Age Analysis Report"
-        : "Creditor Aging and Supplier-wise Net Balance Report";
-      setGenerationStage(`${reportName} generated successfully!`);
-      setSuccessMessage(result.message || `${reportName} generated successfully.`);
+      setGenerationStage("All Debtor and Creditor Aging reports generated successfully!");
+      setSuccessMessage(result.message || "All aging reports generated successfully.");
       await loadStatus();
     } catch (err) {
       clearTimeout(t1);
@@ -315,7 +296,7 @@ export default function DebtorAgeAnalysis() {
       clearTimeout(t3);
       setProgress(0);
       setGenerationStage("");
-      setErrorMessage(err.message || "Unable to generate the selected aging report.");
+      setErrorMessage(err.message || "Unable to generate all aging reports.");
     } finally {
       setGenerating(false);
     }
@@ -325,15 +306,10 @@ export default function DebtorAgeAnalysis() {
     setErrorMessage("");
     setDownloading(true);
     try {
-      if (reportMode === "debtor") {
-        await downloadDebtorAgeReport();
-        setSuccessMessage("SLT_Debtor_Age_Analysis_Report.xlsx downloaded successfully.");
-      } else {
-        await downloadCreditorAgingReport();
-        setSuccessMessage("Creditor_Aging_Supplier_Net_Balance_Report.xlsx downloaded successfully.");
-      }
+      await downloadAllAgingReports();
+      setSuccessMessage("All aging reports downloaded successfully.");
     } catch (err) {
-      setErrorMessage(err.message || "Unable to download report.");
+      setErrorMessage(err.message || "Unable to download all reports.");
     } finally {
       setDownloading(false);
     }
@@ -361,17 +337,14 @@ export default function DebtorAgeAnalysis() {
     navigate("/login");
   };
 
-  const isDebtorReport = reportMode === "debtor";
-  const selectedInputs = isDebtorReport ? DEBTOR_INPUTS : CREDITOR_INPUTS;
-  const allReady = isDebtorReport
-    ? !!(status?.debtor_aging?.uploaded && status?.netting_report?.uploaded)
-    : !!(status?.creditor_netting?.uploaded && status?.erp_debtor_aging?.uploaded);
-  const reportReady = isDebtorReport
-    ? !!status?.report_ready
-    : !!status?.creditor_report_ready;
-  const reportTitle = isDebtorReport
-    ? "Debtor Age Analysis Report"
-    : "Creditor Aging and Supplier-wise Net Balance Report";
+  const allReady = !!(
+    status?.debtor_aging?.uploaded
+    && status?.netting_report?.uploaded
+    && status?.erp_debtor_aging?.uploaded
+  );
+  const reportReady = !!status?.all_reports_ready;
+  const summary = status?.generation_summary;
+  const progressValue = generating ? progress : (reportReady ? 100 : 0);
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#edf4fb_0%,#f8fafc_46%,#eef3f8_100%)] font-sans text-slate-900">
@@ -426,11 +399,9 @@ export default function DebtorAgeAnalysis() {
             <div className="flex items-center justify-between gap-4">
               <img src={lightLogo} alt="SLT Mobitel Logo" className="h-9 object-contain lg:hidden" />
               <div className="flex-1 text-center">
-                <h1 className="truncate text-lg font-black text-[#082f49] md:text-2xl">{reportTitle}</h1>
+                <h1 className="truncate text-lg font-black text-[#082f49] md:text-2xl">Debtor &amp; Creditor Aging Analysis</h1>
                 <p className="hidden text-sm font-bold text-slate-500 sm:block">
-                  {isDebtorReport
-                    ? "Monthly Debtor Age Analysis from AR/AP netting and debtor aging workbooks"
-                    : "Creditor Aging and supplier-wise net balance from creditor netting and ERP debtor aging workbooks"}
+                  One upload workflow runs both existing aging processes and packages every report together.
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -469,38 +440,12 @@ export default function DebtorAgeAnalysis() {
               <Alert severity="success" onClose={() => setSuccessMessage("")}>{successMessage}</Alert>
             )}
 
-            {/* Step 1 Title Header Card */}
+            {/* Unified Upload Section */}
             <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-black text-[#082f49]">Report Option</h2>
-                  <p className="mt-1 text-sm font-medium text-slate-500">
-                    Choose a report, then upload its two source Excel workbooks.
-                  </p>
-                </div>
-              </div>
-              <ToggleButtonGroup
-                exclusive
-                disabled={generating || resetting || !!busyKey}
-                value={reportMode}
-                onChange={(_, value) => {
-                  if (value) {
-                    setReportMode(value);
-                    setProgress(0);
-                    setGenerationStage("");
-                    setErrorMessage("");
-                    setSuccessMessage("");
-                  }
-                }}
-                aria-label="Aging report option"
-                sx={{
-                  "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 800, px: 2 },
-                  "& .Mui-selected": { color: "#0B3041 !important", backgroundColor: "#eaf2f8 !important" },
-                }}
-              >
-                <ToggleButton value="debtor">Debtor Age Analysis</ToggleButton>
-                <ToggleButton value="creditor">Creditor Aging &amp; Net Balance</ToggleButton>
-              </ToggleButtonGroup>
+              <h2 className="text-lg font-black text-[#082f49]">Debtor &amp; Creditor Aging Analysis</h2>
+              <p className="mt-1 text-sm font-medium text-slate-500">
+                Upload all three Excel workbooks. The AR/AP Netting Report is shared automatically between both processes.
+              </p>
             </Paper>
 
             {/* File Upload Cards */}
@@ -508,12 +453,13 @@ export default function DebtorAgeAnalysis() {
               <div className="flex justify-center py-12"><CircularProgress /></div>
             ) : (
               <div className="space-y-4">
-                {selectedInputs.map((input) => (
+                {AGING_INPUTS.map((input) => (
                   <InputCard
                     key={input.key}
                     input={input}
                     fileInfo={status?.[input.key]}
                     busy={busyKey === input.fileKey}
+                    disabled={!!busyKey || generating}
                     onUpload={handleUpload}
                     onDelete={handleDelete}
                   />
@@ -521,16 +467,14 @@ export default function DebtorAgeAnalysis() {
               </div>
             )}
 
-            {/* Generate & Download Report Card */}
+            {/* Generate, summarize, and download all reports */}
             <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
               <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-lg font-black text-[#082f49]">Generate Report</h2>
+                    <h2 className="text-lg font-black text-[#082f49]">Generate All Reports</h2>
                     <p className="mt-1 text-sm font-medium text-slate-500">
-                      {isDebtorReport
-                        ? "Calculates invoice-level age analysis using the uploaded ERP report and preserves its existing output format."
-                        : "Combines debtor ERP aging with signed payable balances; the workbook includes creditor detail, supplier-wise net aging and reconciliation."}
+                      Both processes run together. The creditor workbook includes details, supplier-wise net aging, and reconciliation.
                     </p>
                   </div>
 
@@ -551,74 +495,112 @@ export default function DebtorAgeAnalysis() {
                         "&:hover": { backgroundColor: "#1B6B93" },
                       }}
                     >
-                      {generating ? "Generating..." : reportReady ? "Re-generate Report" : "Generate Report"}
+                      {generating ? "Generating..." : "Generate All Reports"}
                     </Button>
 
                     {reportReady && (
                       <Button
-                        onClick={handleDownload}
-                        disabled={downloading}
-                        variant="contained"
-                        startIcon={downloading ? <CircularProgress size={18} color="inherit" /> : <DownloadIcon />}
-                        sx={{
-                          minWidth: 180,
-                          height: 46,
-                          px: 3,
-                          textTransform: "none",
-                          fontWeight: 800,
-                          borderRadius: 2,
-                          backgroundColor: "#059669",
-                          "&:hover": { backgroundColor: "#047857" },
-                          boxShadow: "0 4px 14px rgba(5,150,105,0.3)",
-                        }}
+                        onClick={handleGenerate}
+                        disabled={!allReady || generating || resetting}
+                        variant="outlined"
+                        startIcon={generating ? <CircularProgress size={18} /> : <ResetIcon />}
+                        sx={{ height: 46, px: 3, textTransform: "none", fontWeight: 800, borderRadius: 2 }}
                       >
-                        {downloading ? "Downloading..." : "Download Report"}
-                      </Button>
+                        Regenerate Reports
+                    </Button>
                     )}
+
+                    <Button
+                      onClick={handleDownload}
+                      disabled={!reportReady || downloading || generating}
+                      variant="contained"
+                      startIcon={downloading ? <CircularProgress size={18} color="inherit" /> : <DownloadIcon />}
+                      sx={{
+                        minWidth: 200,
+                        height: 46,
+                        px: 3,
+                        textTransform: "none",
+                        fontWeight: 800,
+                        borderRadius: 2,
+                        backgroundColor: "#059669",
+                        "&:hover": { backgroundColor: "#047857" },
+                        boxShadow: "0 4px 14px rgba(5,150,105,0.3)",
+                      }}
+                    >
+                      {downloading ? "Preparing Download..." : "Download All Reports"}
+                    </Button>
                   </div>
                 </div>
 
                 {/* Progress Indicator */}
-                {(generating || reportReady) && (
+                {(generating || reportReady || status?.reports_outdated) && (
                   <div className="mt-2 rounded-xl border border-slate-100 bg-[#f8fafc] p-4">
                     <div className="flex items-center justify-between text-xs font-bold text-slate-600 mb-2">
                       <span className="flex items-center gap-2">
                         {generating ? (
                           <CircularProgress size={14} thickness={5} sx={{ color: "#1B6B93" }} />
-                        ) : (
+                        ) : reportReady ? (
                           <CheckCircleIcon sx={{ fontSize: 16, color: "#059669" }} />
+                        ) : (
+                          <TableIcon sx={{ fontSize: 16, color: "#64748b" }} />
                         )}
-                        <span className="text-slate-700">{generationStage || "Report is ready for download."}</span>
+                        <span className="text-slate-700">
+                          {generationStage || (reportReady
+                            ? "All reports are ready for download."
+                            : "Inputs have changed or reports have not yet been generated. Generate all reports to enable download.")}
+                        </span>
                       </span>
-                      <span className="font-extrabold text-[#0B3041]">{progress || 100}%</span>
+                      <span className="font-extrabold text-[#0B3041]">{progressValue}%</span>
                     </div>
 
                     <LinearProgress
                       variant="determinate"
-                      value={progress || 100}
+                      value={progressValue}
                       sx={{
                         height: 8,
                         borderRadius: 4,
                         backgroundColor: "#e2e8f0",
                         "& .MuiLinearProgress-bar": {
                           borderRadius: 4,
-                          backgroundColor: (progress === 100 || reportReady) ? "#059669" : "#1B6B93",
+                          backgroundColor: reportReady ? "#059669" : "#1B6B93",
                           transition: "transform 0.4s ease",
                         },
                       }}
                     />
 
                     {reportReady && (
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70">
-                        <p className="text-sm font-bold text-slate-700">
-                          File: {isDebtorReport
-                            ? (status?.report_filename || "SLT_Debtor_Age_Analysis_Report.xlsx")
-                            : (status?.creditor_report_filename || "Creditor_Aging_Supplier_Net_Balance_Report.xlsx")}
-                          {isDebtorReport && <> &middot; Natural Account 122105 (Voice Debtors)</>}
-                        </p>
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
-                          <CheckCircleIcon fontSize="inherit" /> Ready to Download
+                      <div className="mt-4 space-y-3 border-t border-slate-200/70 pt-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="font-extrabold text-[#082f49]">Processing Summary</h3>
+                          <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                            <CheckCircleIcon fontSize="inherit" /> Ready to Download
+                          </span>
                         </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                            <p className="font-extrabold text-slate-800">Debtor Aging: {summary?.debtor_process?.status || "Success"}</p>
+                            <p>{summary?.debtor_process?.report_count ?? 1} report · Reporting date: {summary?.debtor_process?.report_date || "—"}</p>
+                            <p className="mt-1 text-xs text-slate-500">{(summary?.debtor_process?.reports || []).join(", ")}</p>
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                            <p className="font-extrabold text-slate-800">Creditor Aging: {summary?.creditor_process?.status || "Success"}</p>
+                            <p>{summary?.creditor_process?.report_count ?? 3} reports · Reporting date: {summary?.creditor_process?.report_date || "—"}</p>
+                            <p className="mt-1 text-xs text-slate-500">{(summary?.creditor_process?.reports || []).join(", ")}</p>
+                          </div>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-700">
+                          Reconciliation ({summary?.reconciliation?.currency || "—"}): Debtors {summary?.reconciliation?.debtor_total ?? "—"} ·
+                          Creditors {summary?.reconciliation?.creditor_total ?? "—"} · Net {summary?.reconciliation?.net_total ?? "—"}
+                        </p>
+                        {summary?.warnings?.length > 0 && (
+                          <Alert severity="warning">{summary.warnings.join(" ")}</Alert>
+                        )}
+                        {summary?.warnings?.length === 0 && (
+                          <p className="text-sm text-slate-500">No warnings or validation issues.</p>
+                        )}
+                        <p className="text-xs text-slate-500">
+                          Download package: {status?.all_reports_filename || "Debtor_Creditor_Aging_Reports.zip"}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -626,19 +608,11 @@ export default function DebtorAgeAnalysis() {
               </div>
             </Paper>
 
-            {/* Informational Card */}
+            {/* Aging report details */}
             <Paper elevation={0} className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
               <h3 className="text-base font-extrabold text-[#082f49] mb-2">Report Specifications</h3>
               <p className="text-sm text-slate-600 leading-relaxed">
-                {isDebtorReport ? (
-                  <>
-                    The <strong>SLT Debtor Age Analysis Report</strong> is an invoice-level aging report covering outstanding international Voice Receivables. Aging buckets are computed from invoice due dates against the report as-on date:
-                  </>
-                ) : (
-                  <>
-                    The <strong>Creditor Aging and Supplier-wise Net Balance Report</strong> uses the debtor ERP report date and currency. Signed payable amounts are converted with <code>Creditor Balance = -Entered Due Remaining</code>; supplier matches and review suggestions appear in the Reconciliation sheet.
-                  </>
-                )}
+                The original Debtor Aging report format is preserved. The creditor workbook includes creditor details, supplier-wise net aging, and reconciliation. Signed payable amounts use <code>Creditor Balance = -Entered Due Remaining</code>.
               </p>
               <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs font-semibold text-slate-700">
                 <span className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">&bull; Current (not overdue)</span>

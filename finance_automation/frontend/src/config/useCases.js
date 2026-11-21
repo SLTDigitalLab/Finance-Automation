@@ -70,8 +70,8 @@ export const USE_CASES = [
   },
   {
     id: "use_case_6",
-    name: "Debtor Age Analysis Report",
-    description: "Monthly Debtor Age Analysis from AR/AP netting and aging workbooks",
+    name: "Debtor & Creditor Aging Analysis",
+    description: "Unified Debtor Aging and Creditor Aging reports from three shared Excel inputs",
     icon: PaidIcon,
     color: "#DB2777",
     path: "/debtor-age-analysis",

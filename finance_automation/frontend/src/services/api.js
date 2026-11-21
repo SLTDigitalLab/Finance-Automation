@@ -1218,6 +1218,34 @@ export async function uploadNettingReportFile(file) {
   return response.json();
 }
 
+export async function uploadSharedNettingReportFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const url = `${API_BASE}/debtor-age/upload/netting-report`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await parseResponseError(response, "Failed to upload shared AR/AP netting report");
+    console.error("Shared AR/AP netting upload failed", {
+      method: "POST",
+      url,
+      status: response.status,
+      backendError: error.message,
+    });
+    if (response.status === 405) {
+      throw new Error(
+        `Upload failed (HTTP 405): the backend does not accept POST at ${url}. ` +
+        `Verify that the Finance Automation backend is up to date. Server response: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  return response.json();
+}
+
 export async function deleteDebtorAgeFile(fileKey) {
   const response = await fetch(
     `${API_BASE}/debtor-age/upload/${encodeURIComponent(fileKey)}`,
@@ -1307,6 +1335,35 @@ export async function downloadCreditorAgingReport(
   });
   if (!response.ok) {
     const errorText = await readApiError(response, "Failed to download creditor aging report");
+    throw new Error(errorText);
+  }
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function generateAllAgingReports() {
+  const response = await fetch(`${API_BASE}/debtor-age/generate/all`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return safeJsonResponse(response, "Failed to generate all aging reports");
+}
+
+export async function downloadAllAgingReports(
+  filename = "Debtor_Creditor_Aging_Reports.zip"
+) {
+  const response = await fetch(`${API_BASE}/debtor-age/download/all`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await readApiError(response, "Failed to download all aging reports");
     throw new Error(errorText);
   }
   const blob = await response.blob();
