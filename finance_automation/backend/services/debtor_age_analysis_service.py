@@ -11,10 +11,9 @@ Single worksheet: SLT_Debtor_Age_Analysis_Report_
 from __future__ import annotations
 
 import logging
-import shutil
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import openpyxl
 
@@ -42,6 +41,28 @@ BUCKET_COLUMNS = [
 
 class DebtorAgeAnalysisError(ValueError):
     """Raised when input files cannot be processed."""
+
+
+def _receivables_worksheet(workbook: openpyxl.Workbook) -> Any:
+    """Select the netting sheet containing receivables, preferring its known name."""
+    candidates = []
+    for worksheet in workbook.worksheets:
+        row_count = sum(
+            1
+            for row in worksheet.iter_rows(min_row=3, values_only=True)
+            if row and str(row[0] or "").strip() == "Receivables"
+        )
+        if row_count:
+            candidates.append((worksheet, row_count))
+
+    for worksheet, _ in candidates:
+        if worksheet.title == REQUIRED_NETTING_SHEET:
+            return worksheet
+    if candidates:
+        return max(candidates, key=lambda candidate: candidate[1])[0]
+    if REQUIRED_NETTING_SHEET in workbook.sheetnames:
+        return workbook[REQUIRED_NETTING_SHEET]
+    return workbook.worksheets[0]
 
 
 def validate_debtor_aging_file(path: Path) -> Dict[str, Any]:
@@ -77,8 +98,7 @@ def validate_netting_report_file(path: Path) -> Dict[str, Any]:
         ) from exc
 
     sheets = wb.sheetnames
-    target = REQUIRED_NETTING_SHEET if REQUIRED_NETTING_SHEET in sheets else sheets[0]
-    ws = wb[target]
+    ws = _receivables_worksheet(wb)
     rec = pay = 0
     for row in ws.iter_rows(min_row=3, values_only=True):
         src = str(row[0] or "").strip()
@@ -115,17 +135,12 @@ def generate_debtor_age_analysis(
     """
     logger.info("Validating input workbooks...")
     validate_debtor_aging_file(debtor_aging_path)
-    netting_info = validate_netting_report_file(netting_report_path)
+    validate_netting_report_file(netting_report_path)
 
     # 1. Read netting report transactions
     logger.info("Reading netting transactions...")
     wb_net = openpyxl.load_workbook(str(netting_report_path), data_only=True)
-    target_sheet = (
-        REQUIRED_NETTING_SHEET
-        if REQUIRED_NETTING_SHEET in wb_net.sheetnames
-        else wb_net.sheetnames[0]
-    )
-    ws_net = wb_net[target_sheet]
+    ws_net = _receivables_worksheet(wb_net)
 
     netting_by_trx: Dict[str, Dict[str, Any]] = {}
     latest_due: Optional[date] = None

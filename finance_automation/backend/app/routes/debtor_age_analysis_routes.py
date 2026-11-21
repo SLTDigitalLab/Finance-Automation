@@ -2,14 +2,21 @@
 Debtor Age Analysis Report API Routes
 Use Case 6: Debtor Age Analysis Report
 """
+import json
 import logging
+import os
+import tempfile
 import uuid
+import zipfile
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
+import openpyxl
+import xlrd
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -42,11 +49,14 @@ MODULE   = "Debtor Age Analysis Report"
 
 UPLOAD_DIR = settings.UPLOAD_DIR / "debtor_age_analysis"
 OUTPUT_DIR = settings.OUTPUT_DIR / "debtor_age_analysis"
-ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
+ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
 OUTPUT_FILENAME = "SLT_Debtor_Age_Analysis_Report.xlsx"
 SUPPLIER_NET_OUTPUT_FILENAME = "Creditor_Aging_Supplier_Net_Balance_Report.xlsx"
+ALL_REPORTS_FILENAME = "Debtor_Creditor_Aging_Reports.zip"
+GENERATION_SUMMARY_FILENAME = "generation_summary.json"
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+ZIP_MEDIA_TYPE = "application/zip"
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +76,7 @@ def _check_ext(filename: str) -> None:
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Only Excel files are accepted (.xlsx, .xls, .xlsm). Got: {ext!r}",
+            detail=f"Only Excel files are accepted (.xlsx, .xls). Got: {ext!r}",
         )
 
 
@@ -79,6 +89,98 @@ def _check_size(content: bytes) -> None:
         )
 
 
+def _stage_upload(content: bytes, filename: str, upload_dir: Path) -> Path:
+    """Write an upload as XLSX so both legacy XLS and XLSX inputs are readable."""
+    staged_path = upload_dir / f".upload-{uuid.uuid4().hex}.xlsx"
+    if Path(filename or "").suffix.lower() != ".xls":
+        staged_path.write_bytes(content)
+        return staged_path
+
+    workbook = None
+    try:
+        source = xlrd.open_workbook(file_contents=content)
+        workbook = openpyxl.Workbook()
+        workbook.remove(workbook.active)
+        for source_sheet in source.sheets():
+            worksheet = workbook.create_sheet(source_sheet.name)
+            for row_index in range(source_sheet.nrows):
+                values = []
+                for column_index in range(source_sheet.ncols):
+                    cell = source_sheet.cell(row_index, column_index)
+                    value = cell.value
+                    if cell.ctype == xlrd.XL_CELL_DATE:
+                        value = xlrd.xldate.xldate_as_datetime(value, source.datemode)
+                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                        value = bool(value)
+                    elif cell.ctype == xlrd.XL_CELL_EMPTY:
+                        value = None
+                    elif cell.ctype == xlrd.XL_CELL_ERROR:
+                        value = xlrd.error_text_from_code(value)
+                    values.append(value)
+                worksheet.append(values)
+        workbook.save(staged_path)
+        return staged_path
+    except Exception as exc:
+        staged_path.unlink(missing_ok=True)
+        logger.warning("Could not normalize uploaded Excel workbook %s: %s", filename, exc)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot read legacy Excel workbook: {exc}",
+        ) from exc
+    finally:
+        if workbook is not None:
+            workbook.close()
+
+
+def _invalidate_combined_reports(output_dir: Path) -> None:
+    if not output_dir.exists():
+        return
+    for filename in (
+        OUTPUT_FILENAME,
+        SUPPLIER_NET_OUTPUT_FILENAME,
+        ALL_REPORTS_FILENAME,
+        GENERATION_SUMMARY_FILENAME,
+    ):
+        (output_dir / filename).unlink(missing_ok=True)
+
+
+def _debtor_report_date(path: Path) -> Optional[str]:
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        value = workbook["SLT_Debtor_Age_Analysis_Report_"].cell(2, 2).value
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value) if value is not None else None
+    finally:
+        workbook.close()
+
+
+def _supplier_review_warnings(path: Path) -> list[str]:
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        worksheet = workbook["Reconciliation"]
+        statuses = [
+            row[4]
+            for row in worksheet.iter_rows(min_row=20, values_only=True)
+            if len(row) > 4
+        ]
+        warnings = []
+        review_count = statuses.count("Matched - review mapping")
+        debtor_only_count = statuses.count("Debtor only")
+        creditor_only_count = statuses.count("Creditor only")
+        if review_count:
+            warnings.append(f"{review_count} supplier match(es) need mapping review.")
+        if debtor_only_count or creditor_only_count:
+            warnings.append(
+                f"Unmatched suppliers: {debtor_only_count} debtor-only and "
+                f"{creditor_only_count} creditor-only; see the Reconciliation report."
+            )
+        return warnings
+    finally:
+        workbook.close()
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -88,7 +190,7 @@ def _check_size(content: bytes) -> None:
 async def get_debtor_age_status(
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
-    """Return the current upload status for the two input files."""
+    """Return upload status and the latest unified report summary."""
     upload_dir = _user_upload_dir(current_user.id)
     output_dir = _user_output_dir(current_user.id)
 
@@ -98,6 +200,22 @@ async def get_debtor_age_status(
     creditor_netting_path = upload_dir / "creditor_netting.xlsx"
     erp_debtor_path = upload_dir / "erp_debtor_aging.xlsx"
     supplier_net_output_path = output_dir / SUPPLIER_NET_OUTPUT_FILENAME
+    all_reports_path = output_dir / ALL_REPORTS_FILENAME
+    summary_path = output_dir / GENERATION_SUMMARY_FILENAME
+    all_reports_ready = all(
+        path.exists()
+        for path in (
+            output_path,
+            supplier_net_output_path,
+            all_reports_path,
+            summary_path,
+        )
+    )
+    generation_summary = (
+        json.loads(summary_path.read_text(encoding="utf-8"))
+        if all_reports_ready
+        else None
+    )
 
     return {
         "debtor_aging": {
@@ -126,6 +244,12 @@ async def get_debtor_age_status(
         "creditor_report_filename": (
             SUPPLIER_NET_OUTPUT_FILENAME if supplier_net_output_path.exists() else None
         ),
+        "all_reports_ready": all_reports_ready,
+        "all_reports_filename": ALL_REPORTS_FILENAME if all_reports_ready else None,
+        "generation_summary": generation_summary,
+        "reports_outdated": all(
+            path.exists() for path in (debtor_path, netting_path, erp_debtor_path)
+        ) and not all_reports_ready,
     }
 
 
@@ -144,14 +268,16 @@ async def upload_debtor_aging(
     upload_dir = _user_upload_dir(current_user.id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / "debtor_aging.xlsx"
-    dest.write_bytes(content)
+    staged_path = _stage_upload(content, file.filename or "", upload_dir)
 
     # Validate workbook structure
     try:
-        info = validate_debtor_aging_file(dest)
+        info = validate_debtor_aging_file(staged_path)
     except DebtorAgeAnalysisError as exc:
-        dest.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc))
+    os.replace(staged_path, dest)
+    _invalidate_combined_reports(_user_output_dir(current_user.id))
 
     log_audit(
         db=db,
@@ -172,13 +298,14 @@ async def upload_debtor_aging(
 
 
 @debtor_age_router.post("/upload/netting-report")
-async def upload_netting_report(
+@debtor_age_router.post("/upload/shared-netting-report")
+async def upload_shared_netting_report(
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_use_case(USE_CASE)),
 ):
-    """Upload the SLT AR/AP Netting Report Excel workbook."""
+    """Upload the single AR/AP workbook shared by the debtor and creditor processes."""
     _check_ext(file.filename or "")
     content = await file.read()
     _check_size(content)
@@ -186,14 +313,25 @@ async def upload_netting_report(
     upload_dir = _user_upload_dir(current_user.id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / "netting_report.xlsx"
-    dest.write_bytes(content)
-
-    # Validate
+    staged_path = _stage_upload(content, file.filename or "", upload_dir)
     try:
-        info = validate_netting_report_file(dest)
-    except DebtorAgeAnalysisError as exc:
-        dest.unlink(missing_ok=True)
+        debtor_info = validate_netting_report_file(staged_path)
+        creditor_info = validate_creditor_netting_file(staged_path)
+        if not debtor_info["receivables_rows"]:
+            raise DebtorAgeAnalysisError(
+                "The netting workbook contains no Receivables transactions."
+            )
+    except (DebtorAgeAnalysisError, CreditorAgingError) as exc:
+        staged_path.unlink(missing_ok=True)
+        logger.warning(
+            "Rejected shared AR/AP netting workbook for user %s (%s): %s",
+            current_user.id,
+            file.filename,
+            exc,
+        )
         raise HTTPException(status_code=422, detail=str(exc))
+    os.replace(staged_path, dest)
+    _invalidate_combined_reports(_user_output_dir(current_user.id))
 
     log_audit(
         db=db,
@@ -201,16 +339,16 @@ async def upload_netting_report(
         user_name=current_user.full_name,
         action="Upload",
         module=MODULE,
-        description=f"Uploaded AR/AP netting report: {file.filename}",
+        description=f"Uploaded shared AR/AP netting report: {file.filename}",
         request=request,
     )
-
     return {
-        "message": "AR/AP netting report uploaded and validated successfully.",
+        "message": "Shared AR/AP netting report uploaded and validated for both processes.",
         "original_filename": file.filename,
-        "sheets": info["sheets"],
-        "receivables_rows": info["receivables_rows"],
-        "payables_rows": info["payables_rows"],
+        "sheets": debtor_info["sheets"],
+        "receivables_rows": debtor_info["receivables_rows"],
+        "payables_rows": creditor_info["payables_rows"],
+        "currencies": creditor_info["currencies"],
         "file_size": len(content),
     }
 
@@ -230,12 +368,14 @@ async def upload_creditor_netting(
     upload_dir = _user_upload_dir(current_user.id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / "creditor_netting.xlsx"
-    dest.write_bytes(content)
+    staged_path = _stage_upload(content, file.filename or "", upload_dir)
     try:
-        info = validate_creditor_netting_file(dest)
+        info = validate_creditor_netting_file(staged_path)
     except CreditorAgingError as exc:
-        dest.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc))
+    os.replace(staged_path, dest)
+    _invalidate_combined_reports(_user_output_dir(current_user.id))
 
     log_audit(
         db=db,
@@ -270,12 +410,14 @@ async def upload_erp_debtor_aging(
     upload_dir = _user_upload_dir(current_user.id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / "erp_debtor_aging.xlsx"
-    dest.write_bytes(content)
+    staged_path = _stage_upload(content, file.filename or "", upload_dir)
     try:
-        info = validate_erp_debtor_file(dest)
+        info = validate_erp_debtor_file(staged_path)
     except CreditorAgingError as exc:
-        dest.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc))
+    os.replace(staged_path, dest)
+    _invalidate_combined_reports(_user_output_dir(current_user.id))
 
     log_audit(
         db=db,
@@ -305,6 +447,7 @@ async def delete_uploaded_file(
     key_map = {
         "debtor-aging":   "debtor_aging.xlsx",
         "netting-report": "netting_report.xlsx",
+        "shared-netting-report": "netting_report.xlsx",
         "creditor-netting": "creditor_netting.xlsx",
         "erp-debtor-aging": "erp_debtor_aging.xlsx",
     }
@@ -315,6 +458,7 @@ async def delete_uploaded_file(
     dest = upload_dir / key_map[file_key]
     if dest.exists():
         dest.unlink()
+        _invalidate_combined_reports(_user_output_dir(current_user.id))
         return {"message": f"File '{file_key}' removed."}
     return {"message": "File not found – nothing to remove."}
 
@@ -464,6 +608,174 @@ async def download_creditor_report(
         path=str(output_path),
         filename=SUPPLIER_NET_OUTPUT_FILENAME,
         media_type=EXCEL_MEDIA_TYPE,
+    )
+
+
+@debtor_age_router.post("/generate/all")
+async def generate_all_reports(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Run both aging processes from the three unified input workbooks."""
+    upload_dir = _user_upload_dir(current_user.id)
+    debtor_path = upload_dir / "debtor_aging.xlsx"
+    netting_path = upload_dir / "netting_report.xlsx"
+    erp_debtor_path = upload_dir / "erp_debtor_aging.xlsx"
+    missing = [
+        label
+        for label, path in (
+            ("Debtor Aging workbook", debtor_path),
+            ("shared SLT AR/AP Netting Report workbook", netting_path),
+            ("SLT Debtor Age Analysis ERP Report", erp_debtor_path),
+        )
+        if not path.exists()
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload all required workbooks before generating reports: {', '.join(missing)}.",
+        )
+
+    output_dir = _user_output_dir(current_user.id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _invalidate_combined_reports(output_dir)
+
+    with tempfile.TemporaryDirectory(prefix="aging-", dir=str(output_dir)) as temp_dir:
+        staged_dir = Path(temp_dir)
+        debtor_output = staged_dir / OUTPUT_FILENAME
+        creditor_output = staged_dir / SUPPLIER_NET_OUTPUT_FILENAME
+        try:
+            await run_in_threadpool(
+                generate_debtor_age_analysis,
+                debtor_path,
+                netting_path,
+                debtor_output,
+            )
+        except DebtorAgeAnalysisError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Debtor Aging process failed: {exc}",
+            ) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error generating Debtor Aging report: %s", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Debtor Aging process failed: {exc}",
+            ) from exc
+
+        try:
+            creditor_result = await run_in_threadpool(
+                generate_creditor_aging_report,
+                netting_path,
+                erp_debtor_path,
+                creditor_output,
+            )
+        except CreditorAgingError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Creditor Aging process failed: {exc}",
+            ) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error generating Creditor Aging reports: %s", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Creditor Aging process failed: {exc}",
+            ) from exc
+
+        warnings = _supplier_review_warnings(creditor_output)
+        summary = {
+            "debtor_process": {
+                "status": "success",
+                "report_count": 1,
+                "report_date": _debtor_report_date(debtor_output),
+                "reports": [OUTPUT_FILENAME],
+            },
+            "creditor_process": {
+                "status": "success",
+                "report_count": 3,
+                "report_date": creditor_result["report_date"].isoformat(),
+                "currency": creditor_result["currency"],
+                "reports": [
+                    "Creditor Aging Details",
+                    "Supplier-wise Net Aging",
+                    "Reconciliation",
+                ],
+            },
+            "reconciliation": {
+                "currency": creditor_result["currency"],
+                "debtor_total": str(creditor_result["debtor_total"]),
+                "creditor_total": str(creditor_result["creditor_total"]),
+                "net_total": str(creditor_result["net_total"]),
+            },
+            "warnings": warnings,
+            "output_files": [OUTPUT_FILENAME, SUPPLIER_NET_OUTPUT_FILENAME],
+        }
+
+        try:
+            debtor_final = output_dir / OUTPUT_FILENAME
+            creditor_final = output_dir / SUPPLIER_NET_OUTPUT_FILENAME
+            os.replace(debtor_output, debtor_final)
+            os.replace(creditor_output, creditor_final)
+
+            zip_staged = staged_dir / ALL_REPORTS_FILENAME
+            with zipfile.ZipFile(zip_staged, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.write(debtor_final, arcname=OUTPUT_FILENAME)
+                archive.write(creditor_final, arcname=SUPPLIER_NET_OUTPUT_FILENAME)
+            os.replace(zip_staged, output_dir / ALL_REPORTS_FILENAME)
+            (output_dir / GENERATION_SUMMARY_FILENAME).write_text(
+                json.dumps(summary, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            _invalidate_combined_reports(output_dir)
+            logger.exception("Could not finalize combined aging reports: %s", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not finalize combined aging reports: {exc}",
+            ) from exc
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        action="Generate",
+        module=MODULE,
+        description="Generated all Debtor and Creditor Aging reports.",
+        request=request,
+    )
+    return {
+        "message": "Debtor and Creditor Aging reports generated successfully.",
+        **summary,
+        "filename": ALL_REPORTS_FILENAME,
+    }
+
+
+@debtor_age_router.get("/download/all")
+async def download_all_reports(
+    current_user: User = Depends(require_use_case(USE_CASE)),
+):
+    """Download all latest debtor and creditor aging reports in one ZIP archive."""
+    output_dir = _user_output_dir(current_user.id)
+    zip_path = output_dir / ALL_REPORTS_FILENAME
+    ready = all(
+        path.exists()
+        for path in (
+            zip_path,
+            output_dir / OUTPUT_FILENAME,
+            output_dir / SUPPLIER_NET_OUTPUT_FILENAME,
+            output_dir / GENERATION_SUMMARY_FILENAME,
+        )
+    )
+    if not ready:
+        raise HTTPException(
+            status_code=404,
+            detail="All reports are not ready or are outdated. Generate all reports again before downloading.",
+        )
+    return FileResponse(
+        path=str(zip_path),
+        filename=ALL_REPORTS_FILENAME,
+        media_type=ZIP_MEDIA_TYPE,
     )
 
 

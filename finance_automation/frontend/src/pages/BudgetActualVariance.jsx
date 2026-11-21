@@ -33,7 +33,7 @@ const NAV_ITEMS = [
   { label: "Financial Analysis", icon: AssessmentIcon, path: "/financial-analysis" },
   { label: "CIP Reconciliation", icon: AccountBalanceIcon, path: "/cip-reconciliation" },
   { label: "Accrual Entry Report", icon: ReceiptIcon, path: "/accrual-entry-report" },
-  { label: "Debtor Age Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
+  { label: "Debtor & Creditor Aging Analysis", icon: DebtorIcon, path: "/debtor-age-analysis" },
   { label: "Budget vs Actual Variance", icon: AssessmentIcon, path: "/budget-actual-variance", active: true },
   { label: "Profile", icon: PersonIcon, path: "/profile" },
 ];
